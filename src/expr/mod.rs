@@ -1,60 +1,8 @@
-use std::error;
-use std::fmt;
-use std::io;
+mod error;
+
 use std::process::{Command, Stdio};
-use std::result;
 
-pub type Result<T> = result::Result<T, ExprError>;
-
-pub trait ErrorChainToExprError<T> {
-    fn chain_err(self, kind: ErrorKind) -> Result<T>;
-}
-
-#[derive(Debug)]
-pub struct ExprError {
-    kind: ErrorKind,
-    cause: Option<Box<dyn error::Error>>,
-}
-
-impl fmt::Display for ExprError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
-    }
-}
-
-impl error::Error for ExprError {
-    fn cause(&self) -> Option<&dyn error::Error> {
-        self.cause.as_ref().map(|x| &**x as &dyn error::Error)
-    }
-}
-
-impl ExprError {
-    pub fn new(kind: ErrorKind) -> ExprError {
-        ExprError {
-            kind: kind,
-            cause: None,
-        }
-    }
-
-    pub fn with_cause(kind: ErrorKind, cause: Box<dyn error::Error>) -> ExprError {
-        ExprError {
-            kind: kind,
-            cause: Some(cause),
-        }
-    }
-}
-
-impl<T> ErrorChainToExprError<T> for result::Result<T, io::Error> {
-    fn chain_err(self, kind: ErrorKind) -> Result<T> {
-        self.map_err(|e| ExprError::with_cause(kind, box e))
-    }
-}
-
-#[derive(Debug)]
-pub enum ErrorKind {
-    EmptyFnCall,
-    CmdInvokationError,
-}
+pub use self::error::{ChainableToExprError, ErrorKind, ExprError, Result};
 
 #[derive(Debug)]
 pub enum Expr {
