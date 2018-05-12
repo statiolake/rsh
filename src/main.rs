@@ -6,6 +6,7 @@ extern crate colored_print;
 extern crate log;
 extern crate env_logger;
 
+mod builtin;
 mod consts;
 mod expr;
 mod parser;
@@ -86,8 +87,8 @@ fn run_once(stdin: &mut io::StdinLock) -> Result<()> {
     stdin.read_line(&mut line).unwrap();
     let expr = Parser::from(line.trim()).parse().chain_err()?;
     debug!("parser result: {:?}", expr);
-    let mut cmd = expr.make_toplevel_command().chain_err()?;
+    let mut cmd = expr.make_toplevel_runnable().chain_err()?;
     debug!("invoke cmd: {:?}", cmd);
-    println!("{:?}", cmd.output());
+    println!("{:?}", cmd.run());
     Ok(())
 }

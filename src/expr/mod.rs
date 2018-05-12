@@ -1,8 +1,10 @@
 mod error;
+mod runnable;
 
 use std::process::{Command, Stdio};
 
 pub use self::error::{ChainableToExprError, ErrorKind, ExprError, Result};
+pub use self::runnable::Runnable;
 
 #[derive(Debug)]
 pub enum Expr {
@@ -28,10 +30,6 @@ impl Expr {
         }
     }
 
-    pub fn make_toplevel_command(self) -> Result<Command> {
-        self.make_command(Stdio::inherit(), Stdio::inherit(), Stdio::inherit())
-    }
-
     fn unwrap_literal(self) -> String {
         match self {
             Expr::Literal(s) => s,
@@ -44,6 +42,14 @@ impl Expr {
             Expr::Literal(_) => panic!("unwrap_fncall called on Literal value."),
             Expr::FnCall(args) => args,
         }
+    }
+
+    pub fn make_toplevel_runnable(self) -> Result<Runnable> {
+        self.make_runnable(Stdio::inherit(), Stdio::inherit(), Stdio::inherit())
+    }
+
+    fn make_runnable(self, stdin: Stdio, stdout: Stdio, stderr: Stdio) -> Result<Runnable> {
+        self.make_command(stdin, stdout, stderr).map(From::from)
     }
 
     fn make_command(self, stdin: Stdio, stdout: Stdio, stderr: Stdio) -> Result<Command> {
