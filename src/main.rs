@@ -36,7 +36,10 @@ pub enum RshError {
 
 impl fmt::Display for RshError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
+        match *self {
+            RshError::ExprError(ref e) => writeln!(f, "in expression: {}", e),
+            RshError::ParseError(ref e) => writeln!(f, "parsing expression: {}", e),
+        }
     }
 }
 

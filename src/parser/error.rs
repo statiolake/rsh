@@ -13,7 +13,13 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
+        match self.kind {
+            ErrorKind::OpenParenthesisIsNotJustAfterWhitespace => {
+                writeln!(f, "no whitespace found before open parenthesis.")
+            }
+            ErrorKind::DoubleQuoteNotEnded => writeln!(f, "double-quoted string is not closed."),
+            ErrorKind::SingleQuoteNotEnded => writeln!(f, "single-quoted string is not closed."),
+        }
     }
 }
 

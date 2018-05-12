@@ -15,7 +15,21 @@ pub struct ExprError {
 
 impl fmt::Display for ExprError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
+        match self.kind {
+            ErrorKind::CmdInvokationError => {
+                writeln!(f, "in invoking command")?;
+                if let Some(ref e) = self.cause {
+                    writeln!(f, "    caused by: {}", e)?;
+                }
+            }
+            ErrorKind::EmptyFnCall => {
+                writeln!(f, "nothing inside parenthesis, empty function call!")?;
+                if let Some(ref e) = self.cause {
+                    writeln!(f, "    caused by: {}", e)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
