@@ -87,7 +87,7 @@ fn run_once(stdin: &mut io::StdinLock) -> Result<()> {
     stdin.read_line(&mut line).unwrap();
     let expr = Parser::from(line.trim()).parse().chain_err()?;
     debug!("parser result: {:?}", expr);
-    let mut cmd = expr.make_toplevel_runnable().chain_err()?;
+    let cmd = expr.make_toplevel_runnable().chain_err()?;
     debug!("invoke cmd: {:?}", cmd);
     println!("{:?}", cmd.run());
     Ok(())
