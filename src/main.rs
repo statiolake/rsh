@@ -3,7 +3,6 @@ mod expr;
 mod parser;
 
 use std::error;
-use std::fmt;
 use std::io;
 use std::io::prelude::*;
 use std::result;
@@ -16,46 +15,9 @@ use crate::parser::Parser;
 
 pub const COLOR_ERROR: ConsoleColor = ConsoleColor::Red;
 
-pub type Result<T> = result::Result<T, RshError>;
+pub type Result<T> = result::Result<T, Box<dyn error::Error>>;
 
-pub trait ErrorChainToRshError<T> {
-    fn chain_err(self) -> Result<T>;
-}
-
-#[derive(Debug)]
-pub enum RshError {
-    ExprError(expr::ExprError),
-    ParseError(parser::ParseError),
-}
-
-impl fmt::Display for RshError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
-    }
-}
-
-impl<T> ErrorChainToRshError<T> for expr::Result<T> {
-    fn chain_err(self) -> Result<T> {
-        self.map_err(|e| RshError::ExprError(e))
-    }
-}
-
-impl<T> ErrorChainToRshError<T> for parser::Result<T> {
-    fn chain_err(self) -> Result<T> {
-        self.map_err(|e| RshError::ParseError(e))
-    }
-}
-
-impl error::Error for RshError {
-    fn cause(&self) -> Option<&dyn error::Error> {
-        match *self {
-            RshError::ExprError(ref e) => Some(e),
-            RshError::ParseError(ref e) => Some(e),
-        }
-    }
-}
-
-fn main() {
+fn main() -> Result<()> {
     env_logger::init();
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
@@ -75,9 +37,9 @@ fn run_once(stdin: &mut io::StdinLock) -> Result<()> {
     io::stdout().flush().unwrap();
     let mut line = String::new();
     stdin.read_line(&mut line).unwrap();
-    let expr = Parser::from(line.trim()).parse().chain_err()?;
+    let expr = Parser::from(line.trim()).parse()?;
     debug!("parser result: {:?}", expr);
-    let mut cmd = expr.make_toplevel_command().chain_err()?;
+    let mut cmd = expr.make_toplevel_command()?;
     debug!("invoke cmd: {:?}", cmd);
     println!("{:?}", cmd.output());
     Ok(())

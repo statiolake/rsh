@@ -8,7 +8,7 @@ use log::debug;
 
 pub type Result<T> = result::Result<T, ExprError>;
 
-pub trait ErrorChainToExprError<T> {
+pub trait ChainableToExprError<T> {
     fn chain_err(self, kind: ErrorKind) -> Result<T>;
 }
 
@@ -46,7 +46,7 @@ impl ExprError {
     }
 }
 
-impl<T> ErrorChainToExprError<T> for result::Result<T, io::Error> {
+impl<T> ChainableToExprError<T> for result::Result<T, io::Error> {
     fn chain_err(self, kind: ErrorKind) -> Result<T> {
         self.map_err(|e| ExprError::with_cause(kind, Box::new(e)))
     }
