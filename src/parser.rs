@@ -4,7 +4,7 @@ use std::str::Chars;
 use std::fmt;
 use std::error;
 
-use expr::Expr;
+use crate::expr::Expr;
 
 pub const ESCAPE_CHAR: char = '`';
 

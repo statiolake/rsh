@@ -2,6 +2,7 @@
 authors = ["statiolake <statiolake@gmail.com>"]
 name = "rsh"
 version = "0.1.0"
+edition = "2018"
 
 [dependencies]
 env_logger = "0.6.0"

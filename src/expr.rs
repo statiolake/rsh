@@ -4,6 +4,8 @@ use std::io;
 use std::process::{Command, Stdio};
 use std::result;
 
+use log::debug;
+
 pub type Result<T> = result::Result<T, ExprError>;
 
 pub trait ErrorChainToExprError<T> {

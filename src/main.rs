@@ -1,9 +1,3 @@
-#[macro_use]
-extern crate colored_print;
-#[macro_use]
-extern crate log;
-extern crate env_logger;
-
 mod consts;
 mod expr;
 mod parser;
@@ -15,8 +9,10 @@ use std::io::prelude::*;
 use std::result;
 
 use colored_print::color::ConsoleColor;
+use colored_print::colored_println;
+use log::debug;
 
-use parser::Parser;
+use crate::parser::Parser;
 
 pub const COLOR_ERROR: ConsoleColor = ConsoleColor::Red;
 
