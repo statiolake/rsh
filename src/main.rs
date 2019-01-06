@@ -1,5 +1,3 @@
-#![feature(box_syntax)]
-
 #[macro_use]
 extern crate colored_print;
 #[macro_use]
@@ -56,7 +54,7 @@ impl error::Error for RshError {
     fn cause(&self) -> Option<&dyn error::Error> {
         match *self {
             RshError::ExprError(ref e) => Some(e),
-            RshError::ParseError(ref e) => Some(e)
+            RshError::ParseError(ref e) => Some(e),
         }
     }
 }

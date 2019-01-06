@@ -46,7 +46,7 @@ impl ExprError {
 
 impl<T> ErrorChainToExprError<T> for result::Result<T, io::Error> {
     fn chain_err(self, kind: ErrorKind) -> Result<T> {
-        self.map_err(|e| ExprError::with_cause(kind, box e))
+        self.map_err(|e| ExprError::with_cause(kind, Box::new(e)))
     }
 }
 
@@ -68,9 +68,11 @@ impl Expr {
         match self {
             Expr::Literal(_) => Ok(self),
             Expr::FnCall(args) => {
-                let flattened = Expr::FnCall(args.into_iter()
-                    .map(|x| x.child_flattened())
-                    .collect::<Result<_>>()?);
+                let flattened = Expr::FnCall(
+                    args.into_iter()
+                        .map(|x| x.child_flattened())
+                        .collect::<Result<_>>()?,
+                );
                 let mut cmd =
                     flattened.make_command(Stdio::inherit(), Stdio::piped(), Stdio::inherit())?;
                 let res = cmd.output().chain_err(ErrorKind::CmdInvokationError)?;
@@ -99,7 +101,8 @@ impl Expr {
     }
 
     fn make_command(self, stdin: Stdio, stdout: Stdio, stderr: Stdio) -> Result<Command> {
-        let mut args = self.unwrap_fncall()
+        let mut args = self
+            .unwrap_fncall()
             .into_iter()
             .map(|x| x.child_flattened().map(|x| x.unwrap_literal()))
             .collect::<Result<Vec<_>>>()?
