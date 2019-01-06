@@ -1,8 +1,8 @@
+use std::error;
+use std::fmt;
 use std::mem;
 use std::result;
 use std::str::Chars;
-use std::fmt;
-use std::error;
 
 use crate::expr::Expr;
 
@@ -80,11 +80,11 @@ impl<'a> Parser<'a> {
         Parser { chars }
     }
 
-    pub fn parse<'b>(&'b mut self) -> Result<Expr> {
+    pub fn parse(&mut self) -> Result<Expr> {
         self.parse_inner().map(|x| x.0)
     }
 
-    fn parse_inner<'b>(&'b mut self) -> Result<(Expr, Chars<'a>)> {
+    fn parse_inner(&mut self) -> Result<(Expr, Chars<'a>)> {
         let mut state_mut = State::new();
 
         let mut expr = Vec::new();
