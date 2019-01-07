@@ -119,7 +119,13 @@ impl<'a> Parser<'a> {
 
             let mut next_state = state.next();
             match ch {
-                // when escaping current char
+                // when current char is escaped 'n'
+                'n' if state.escaped => literal.push('\n'),
+
+                // when current char is escaped 't'
+                't' if state.escaped => literal.push('\t'),
+
+                // when current char is escaped
                 ch if state.escaped => literal.push(ch),
 
                 // when escape character
