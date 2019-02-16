@@ -8,6 +8,8 @@ use log::debug;
 
 pub mod builtin;
 
+use super::ShellState;
+
 pub use self::builtin::Builtin;
 
 pub type Result<T> = result::Result<T, AstError>;
@@ -45,6 +47,12 @@ impl AstError {
 
 impl<T> ChainableToAstError<T> for io::Result<T> {
     fn chain_err(self, kind: ErrorKind) -> Result<T> {
+        self.map_err(|e| AstError::with_cause(kind, Box::new(e)))
+    }
+}
+
+impl ChainableToAstError<bool> for builtin::builtin_impl::Result {
+    fn chain_err(self, kind: ErrorKind) -> Result<bool> {
         self.map_err(|e| AstError::with_cause(kind, Box::new(e)))
     }
 }
@@ -147,10 +155,14 @@ impl FromIterator<String> for IR {
 }
 
 impl Exec {
-    pub fn run(self) -> io::Result<bool> {
+    pub fn run(self, state: &mut ShellState) -> Result<bool> {
         match self {
-            Exec::Command(mut cmd) => cmd.spawn().and_then(|mut c| c.wait()).map(|s| s.success()),
-            Exec::Builtin(_) => unimplemented!("running builtin is not yet supported."),
+            Exec::Command(mut cmd) => cmd
+                .spawn()
+                .and_then(|mut c| c.wait())
+                .map(|s| s.success())
+                .chain_err(ErrorKind::CmdInvokationError),
+            Exec::Builtin(builtin) => builtin.run(state).chain_err(ErrorKind::CmdInvokationError),
         }
     }
 }

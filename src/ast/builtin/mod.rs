@@ -1,7 +1,9 @@
 use std::result;
 
-use super::Ast;
-use super::{AstError, ErrorKind, Result};
+use crate::ast::{Ast, AstError, ErrorKind, Result};
+use crate::ShellState;
+
+pub mod builtin_impl;
 
 #[derive(Debug)]
 pub struct Builtin {
@@ -28,5 +30,13 @@ pub fn check_builtin(ast: Vec<Ast>) -> Result<result::Result<Builtin, Vec<Ast>>>
             .into_iter()
             .chain(ast)
             .collect())),
+    }
+}
+
+impl Builtin {
+    pub fn run(self, state: &mut ShellState) -> builtin_impl::Result {
+        match self.kind {
+            BuiltinKind::Exit => builtin_impl::exit(state, self.args),
+        }
     }
 }

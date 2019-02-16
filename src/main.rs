@@ -17,12 +17,24 @@ pub const COLOR_ERROR: ConsoleColor = ConsoleColor::Red;
 
 pub type Result<T> = result::Result<T, Box<dyn error::Error>>;
 
-fn main() -> Result<()> {
+#[derive(Default)]
+pub struct ShellState {
+    running: bool,
+}
+
+impl ShellState {
+    pub fn new() -> ShellState {
+        ShellState { running: true }
+    }
+}
+
+fn main() {
     env_logger::init();
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
-    loop {
-        if let Err(e) = run_once(&mut stdin) {
+    let mut state = ShellState::new();
+    while state.running {
+        if let Err(e) = run_once(&mut state, &mut stdin) {
             colored_println! {
                 true;
                 COLOR_ERROR, "error: ";
@@ -32,7 +44,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn run_once(stdin: &mut io::StdinLock) -> Result<()> {
+fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
     print!("> ");
     io::stdout().flush().unwrap();
     let mut line = String::new();
@@ -41,6 +53,7 @@ fn run_once(stdin: &mut io::StdinLock) -> Result<()> {
     debug!("parser result: {:?}", ast);
     let cmd = ast.make_toplevel_command()?;
     debug!("invoke cmd: {:?}", cmd);
-    println!("{:?}", cmd.run());
+    let res = cmd.run(state)?;
+    println!("result: {}", res);
     Ok(())
 }
