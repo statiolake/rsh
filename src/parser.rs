@@ -171,6 +171,6 @@ impl<'a> Parser<'a> {
     }
 
     fn is_whitespace(ch: char) -> bool {
-        " \t\r\n".chars().find(|&c| c == ch).is_some()
+        " \t\r\n".chars().any(|c| c == ch)
     }
 }

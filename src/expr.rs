@@ -32,15 +32,12 @@ impl error::Error for ExprError {
 
 impl ExprError {
     pub fn new(kind: ErrorKind) -> ExprError {
-        ExprError {
-            kind: kind,
-            cause: None,
-        }
+        ExprError { kind, cause: None }
     }
 
     pub fn with_cause(kind: ErrorKind, cause: Box<dyn error::Error>) -> ExprError {
         ExprError {
-            kind: kind,
+            kind,
             cause: Some(cause),
         }
     }
@@ -109,7 +106,10 @@ impl Expr {
             .map(|x| x.child_flattened().map(|x| x.unwrap_literal()))
             .collect::<Result<Vec<_>>>()?
             .into_iter();
-        let mut cmd = Command::new(args.next().ok_or(ExprError::new(ErrorKind::EmptyFnCall))?);
+        let mut cmd = Command::new(
+            args.next()
+                .ok_or_else(|| ExprError::new(ErrorKind::EmptyFnCall))?,
+        );
         cmd.args(args).stdin(stdin).stdout(stdout).stderr(stderr);
         Ok(cmd)
     }
