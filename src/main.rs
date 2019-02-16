@@ -2,6 +2,7 @@ mod ast;
 mod consts;
 mod parser;
 
+use std::env;
 use std::error;
 use std::io;
 use std::io::prelude::*;
@@ -46,7 +47,7 @@ fn main() {
 }
 
 fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
-    print!("> ");
+    print!("{} $ ", env::current_dir()?.display());
     io::stdout().flush().unwrap();
     let mut line = String::new();
     stdin.read_line(&mut line).unwrap();
