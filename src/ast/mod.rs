@@ -25,8 +25,15 @@ pub struct AstError {
 }
 
 impl fmt::Display for AstError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
+    fn fmt(&self, b: &mut fmt::Formatter) -> fmt::Result {
+        match self.kind {
+            ErrorKind::EmptyFnCall => write!(b, "attempted to call empty function.")?,
+            ErrorKind::CmdInvokationError => write!(b, "failed to invoke command.")?,
+        }
+        if let Some(ref cause) = self.cause {
+            write!(b, "\n  caused by: {}", cause)?;
+        }
+        Ok(())
     }
 }
 

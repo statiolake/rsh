@@ -14,6 +14,7 @@ use log::debug;
 use crate::parser::Parser;
 
 pub const COLOR_ERROR: ConsoleColor = ConsoleColor::Red;
+pub const COLOR_INFO: ConsoleColor = ConsoleColor::Cyan;
 
 pub type Result<T> = result::Result<T, Box<dyn error::Error>>;
 
@@ -54,6 +55,10 @@ fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
     let cmd = ast.make_toplevel_command()?;
     debug!("invoke cmd: {:?}", cmd);
     let res = cmd.run(state)?;
-    println!("result: {}", res);
+    colored_println! {
+        true;
+        COLOR_INFO, "result:";
+        ConsoleColor::Reset, " {}", res;
+    }
     Ok(())
 }
