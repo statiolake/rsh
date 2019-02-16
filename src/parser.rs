@@ -6,7 +6,7 @@ use std::str::Chars;
 
 use itertools::Itertools;
 
-use crate::expr::Expr;
+use crate::ast::Ast;
 
 pub const ESCAPE_CHAR: char = '`';
 
@@ -74,22 +74,22 @@ impl<'a> Parser<'a> {
         Parser { chars }
     }
 
-    pub fn parse(&mut self) -> Result<Expr> {
+    pub fn parse(&mut self) -> Result<Ast> {
         self.parse_fncall()
     }
 
-    fn parse_inner(&mut self) -> Result<Expr> {
+    fn parse_inner(&mut self) -> Result<Ast> {
         if let Some('(') = self.chars.peek() {
             assert_eq!(self.chars.next(), Some('('), "logic error");
-            let expr = self.parse_fncall();
+            let ast = self.parse_fncall();
             assert_eq!(self.chars.next(), Some(')'), "incorrect close delimiter");
-            expr
+            ast
         } else {
             self.parse_literal()
         }
     }
 
-    fn parse_fncall(&mut self) -> Result<Expr> {
+    fn parse_fncall(&mut self) -> Result<Ast> {
         // drop delimiter whitespaces
         fn drop_whitespace_chars(chars: &mut Peekable<Chars>) {
             chars
@@ -97,21 +97,21 @@ impl<'a> Parser<'a> {
                 .for_each(drop);
         }
 
-        let mut expr = Vec::new();
+        let mut ast = Vec::new();
         while let Some(ch) = self.chars.peek() {
             match ch {
                 ')' => break,
                 _ => {
-                    expr.push(self.parse_inner()?);
+                    ast.push(self.parse_inner()?);
                     drop_whitespace_chars(&mut self.chars);
                 }
             }
         }
 
-        Ok(Expr::FnCall(expr))
+        Ok(Ast::FnCall(ast))
     }
 
-    fn parse_literal(&mut self) -> Result<Expr> {
+    fn parse_literal(&mut self) -> Result<Ast> {
         let mut state = State::new();
         let mut literal = String::new();
         while let Some(&ch) = self.chars.peek() {
@@ -167,7 +167,7 @@ impl<'a> Parser<'a> {
 
         assert!(!state.double_quote, "double quote not ended.");
         assert!(!state.single_quote, "single quote not ended.");
-        Ok(Expr::Literal(literal))
+        Ok(Ast::Literal(literal))
     }
 
     fn is_whitespace(ch: char) -> bool {

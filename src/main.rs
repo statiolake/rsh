@@ -1,5 +1,5 @@
+mod ast;
 mod consts;
-mod expr;
 mod parser;
 
 use std::error;
@@ -37,10 +37,10 @@ fn run_once(stdin: &mut io::StdinLock) -> Result<()> {
     io::stdout().flush().unwrap();
     let mut line = String::new();
     stdin.read_line(&mut line).unwrap();
-    let expr = Parser::from(line.trim()).parse()?;
-    debug!("parser result: {:?}", expr);
-    let mut cmd = expr.make_toplevel_command()?;
+    let ast = Parser::from(line.trim()).parse()?;
+    debug!("parser result: {:?}", ast);
+    let cmd = ast.make_toplevel_command()?;
     debug!("invoke cmd: {:?}", cmd);
-    println!("{:?}", cmd.output());
+    println!("{:?}", cmd.run());
     Ok(())
 }
