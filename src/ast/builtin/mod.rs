@@ -14,6 +14,7 @@ pub struct Builtin {
 #[derive(Debug)]
 pub enum BuiltinKind {
     Exit,
+    Cd,
 }
 
 pub fn check_builtin(ast: Vec<Ast>) -> Result<result::Result<Builtin, Vec<Ast>>> {
@@ -24,6 +25,10 @@ pub fn check_builtin(ast: Vec<Ast>) -> Result<result::Result<Builtin, Vec<Ast>>>
     match &*cmd.flattened()? {
         "exit" => Ok(Ok(Builtin {
             kind: BuiltinKind::Exit,
+            args: ast.collect(),
+        })),
+        "cd" => Ok(Ok(Builtin {
+            kind: BuiltinKind::Cd,
             args: ast.collect(),
         })),
         other => Ok(Err(Some(Ast::Literal(other.to_string()))
@@ -37,6 +42,7 @@ impl Builtin {
     pub fn run(self, state: &mut ShellState) -> builtin_impl::Result {
         match self.kind {
             BuiltinKind::Exit => builtin_impl::exit(state, self.args),
+            BuiltinKind::Cd => builtin_impl::cd(state, self.args),
         }
     }
 }
