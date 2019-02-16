@@ -1,5 +1,6 @@
 mod ast;
-mod consts;
+mod builtin;
+mod exec;
 mod parser;
 
 use std::env;
@@ -53,9 +54,7 @@ fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
     stdin.read_line(&mut line).unwrap();
     let ast = Parser::from(line.trim()).parse()?;
     debug!("parser result: {:?}", ast);
-    let cmd = ast.make_toplevel_command()?;
-    debug!("invoke cmd: {:?}", cmd);
-    let res = cmd.run(state)?;
+    let res = ast.run_toplevel(state)?;
     colored_println! {
         true;
         COLOR_INFO, "result:";

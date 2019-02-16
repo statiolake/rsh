@@ -1,12 +1,10 @@
-use std::error;
-use std::fmt;
 use std::iter::Peekable;
-use std::result;
 use std::str::Chars;
+use std::{error, fmt, result};
 
 use itertools::Itertools;
 
-use crate::ast::Ast;
+use crate::ast::{Ast, FnCall};
 
 pub const ESCAPE_CHAR: char = '`';
 
@@ -40,8 +38,10 @@ pub struct ParseError {
 }
 
 impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{:?}", self)
+    fn fmt(&self, b: &mut fmt::Formatter) -> fmt::Result {
+        match self.kind {
+            ErrorKind::EmptyFnCall => write!(b, "empty function call found."),
+        }
     }
 }
 
@@ -55,7 +55,9 @@ impl ParseError {
 }
 
 #[derive(Debug)]
-pub enum ErrorKind {}
+pub enum ErrorKind {
+    EmptyFnCall,
+}
 
 pub type Result<T> = result::Result<T, ParseError>;
 
@@ -97,18 +99,23 @@ impl<'a> Parser<'a> {
                 .for_each(drop);
         }
 
-        let mut ast = Vec::new();
+        let mut fncall = Vec::new();
         while let Some(ch) = self.chars.peek() {
             match ch {
                 ')' => break,
                 _ => {
-                    ast.push(self.parse_inner()?);
+                    fncall.push(self.parse_inner()?);
                     drop_whitespace_chars(&mut self.chars);
                 }
             }
         }
+        let mut fncall = fncall.into_iter();
+        let cmd = fncall
+            .next()
+            .ok_or_else(|| ParseError::new(ErrorKind::EmptyFnCall))?;
+        let args = fncall.collect();
 
-        Ok(Ast::FnCall(ast))
+        Ok(Ast::FnCall(FnCall(Box::new(cmd), args)))
     }
 
     fn parse_literal(&mut self) -> Result<Ast> {
