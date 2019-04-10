@@ -1,7 +1,7 @@
 use std::process::{Command, Stdio};
 use std::{error, fmt, result};
 
-use crate::ast::FnCall;
+use crate::fncall::FnCall;
 use crate::ShellState;
 
 pub type Result<T> = result::Result<T, ExecError>;
@@ -108,10 +108,17 @@ fn make_raw_command(
 }
 
 fn flatten(Exec(FnCall(cmd, args)): Exec, state: &mut ShellState) -> Result<(String, Vec<String>)> {
-    let cmd = cmd.run(state).chain_err(ErrorKind::CmdInvokationError)?;
+    let cmd = cmd
+        .run_get_string(state)
+        .chain_err(ErrorKind::CmdInvokationError)?;
+
     let args: Vec<_> = args
         .into_iter()
         .map(|arg| arg.run(state).chain_err(ErrorKind::CmdInvokationError))
-        .collect::<Result<_>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flat_map(Vec::into_iter)
+        .collect();
+
     Ok((cmd, args))
 }

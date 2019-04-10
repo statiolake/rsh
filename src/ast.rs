@@ -2,6 +2,7 @@ use std::{error, fmt, result};
 
 use crate::builtin::Builtin;
 use crate::exec::Exec;
+use crate::fncall::FnCall;
 use crate::ShellState;
 
 pub type Result<T> = result::Result<T, AstError>;
@@ -22,10 +23,8 @@ pub enum ErrorKind {
     BuiltinDeterminationError,
     BuiltinExecutionError,
     ExternalExecutionError,
+    InvalidArrayError,
 }
-
-#[derive(Debug)]
-pub struct FnCall(pub Box<Ast>, pub Vec<Ast>);
 
 #[derive(Debug)]
 pub enum Ast {
@@ -58,6 +57,9 @@ impl fmt::Display for AstError {
             )?,
             ErrorKind::BuiltinExecutionError => write!(b, "failed to run builtin command.")?,
             ErrorKind::ExternalExecutionError => write!(b, "failed to execute external command.")?,
+            ErrorKind::InvalidArrayError => {
+                write!(b, "invalid array: array is not expected here.")?
+            }
         }
         if let Some(ref cause) = self.cause {
             write!(b, "\n  caused by: {}", cause)?;
@@ -82,11 +84,20 @@ impl Ast {
         }
     }
 
-    pub fn run(self, state: &mut ShellState) -> Result<String> {
+    pub fn run(self, state: &mut ShellState) -> Result<Vec<String>> {
         match self {
-            Ast::Literal(lit) => Ok(lit),
+            Ast::Literal(lit) => Ok(vec![lit]),
             Ast::FnCall(fncall) => fncall.run(state),
         }
+    }
+
+    pub fn run_get_string(self, state: &mut ShellState) -> Result<String> {
+        let res = self.run(state)?;
+        if res.len() != 1 {
+            return Err(AstError::new(ErrorKind::InvalidArrayError));
+        }
+
+        Ok(res.into_iter().next().expect("there must be an item!"))
     }
 }
 
@@ -102,12 +113,15 @@ impl FnCall {
         }
     }
 
-    pub fn run(self, state: &mut ShellState) -> Result<String> {
+    pub fn run(self, state: &mut ShellState) -> Result<Vec<String>> {
         match dispatch(self, state)? {
             CallKind::Builtin(builtin) => builtin
                 .run(state)
                 .chain_err(ErrorKind::BuiltinExecutionError),
-            CallKind::Exec(exec) => exec.run(state).chain_err(ErrorKind::ExternalExecutionError),
+            CallKind::Exec(exec) => exec
+                .run(state)
+                .chain_err(ErrorKind::ExternalExecutionError)
+                .map(|x| vec![x]),
         }
     }
 }

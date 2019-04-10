@@ -1,6 +1,7 @@
 mod ast;
 mod builtin;
 mod exec;
+mod fncall;
 mod parser;
 
 use std::env;

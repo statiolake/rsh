@@ -4,7 +4,8 @@ use std::{error, fmt, result};
 
 use itertools::Itertools;
 
-use crate::ast::{Ast, FnCall};
+use crate::ast::Ast;
+use crate::fncall::FnCall;
 
 pub const ESCAPE_CHAR: char = '`';
 

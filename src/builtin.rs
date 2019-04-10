@@ -1,7 +1,8 @@
 use std::result;
 
+use crate::ast::Ast;
 pub use crate::ast::Result;
-use crate::ast::{Ast, FnCall};
+use crate::fncall::FnCall;
 use crate::ShellState;
 
 #[derive(Debug)]
@@ -14,6 +15,7 @@ pub struct Builtin {
 pub enum Kind {
     Exit,
     Cd,
+    Split,
 }
 
 impl Builtin {
@@ -23,7 +25,8 @@ impl Builtin {
     ) -> Result<result::Result<Builtin, FnCall>> {
         let FnCall(cmd, args) = fncall;
 
-        let res = cmd.run(state)?;
+        let res = cmd.run_get_string(state)?;
+
         match &*res {
             "exit" => Ok(Ok(Builtin {
                 kind: Kind::Exit,
@@ -35,19 +38,30 @@ impl Builtin {
                 args,
             })),
 
+            "split" => Ok(Ok(Builtin {
+                kind: Kind::Split,
+                args,
+            })),
+
             _ => Ok(Err(FnCall(Box::new(Ast::Literal(res)), args))),
         }
     }
 
-    pub fn run_toplevel(self, state: &mut ShellState) -> builtin_impl::Result {
+    pub fn run_toplevel(self, state: &mut ShellState) -> builtin_impl::TopLevelResult {
         match self.kind {
             Kind::Exit => builtin_impl::exit(state, self.args),
             Kind::Cd => builtin_impl::cd(state, self.args),
+            _ => {
+                let result = self.run(state)?;
+                println!("{:?}", result);
+                Ok(true)
+            }
         }
     }
 
-    pub fn run(self, _: &mut ShellState) -> result::Result<String, builtin_impl::BuiltinError> {
+    pub fn run(self, state: &mut ShellState) -> builtin_impl::ChildResult {
         match self.kind {
+            Kind::Split => builtin_impl::split(state, self.args),
             _ => Err(builtin_impl::BuiltinError::ToplevelOnlyCommand),
         }
     }
@@ -59,7 +73,9 @@ pub mod builtin_impl {
     use crate::ast::{Ast, AstError};
     use crate::ShellState;
 
-    pub type Result = result::Result<bool, BuiltinError>;
+    type Result<T> = result::Result<T, BuiltinError>;
+    pub type TopLevelResult = Result<bool>;
+    pub type ChildResult = Result<Vec<String>>;
 
     #[derive(Debug)]
     pub enum BuiltinError {
@@ -104,7 +120,7 @@ pub mod builtin_impl {
         }
     }
 
-    pub fn exit(state: &mut ShellState, args: Vec<Ast>) -> Result {
+    pub fn exit(state: &mut ShellState, args: Vec<Ast>) -> TopLevelResult {
         if !args.is_empty() {
             return Err(BuiltinError::UnexpectedNumberOfArgument {
                 expected: 0,
@@ -115,7 +131,7 @@ pub mod builtin_impl {
         Ok(true)
     }
 
-    pub fn cd(state: &mut ShellState, args: Vec<Ast>) -> Result {
+    pub fn cd(state: &mut ShellState, args: Vec<Ast>) -> TopLevelResult {
         use std::env;
         if args.len() != 1 {
             return Err(BuiltinError::UnexpectedNumberOfArgument {
@@ -124,7 +140,7 @@ pub mod builtin_impl {
             });
         }
 
-        let path = args.into_iter().next().unwrap().run(state)?;
+        let path = args.into_iter().next().unwrap().run_get_string(state)?;
         match env::set_current_dir(path) {
             Ok(_) => Ok(true),
             Err(e) => {
@@ -132,5 +148,22 @@ pub mod builtin_impl {
                 Ok(false)
             }
         }
+    }
+
+    pub fn split(state: &mut ShellState, args: Vec<Ast>) -> ChildResult {
+        if args.len() != 1 {
+            return Err(BuiltinError::UnexpectedNumberOfArgument {
+                expected: 1,
+                found: args.len() as _,
+            });
+        }
+
+        let value = args.into_iter().next().unwrap().run_get_string(state)?;
+
+        Ok(value
+            .split('\n')
+            .filter(|x| !x.is_empty())
+            .map(|x| x.into())
+            .collect())
     }
 }
