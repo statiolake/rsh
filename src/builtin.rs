@@ -16,6 +16,7 @@ pub enum Kind {
     Exit,
     Cd,
     Split,
+    Trim,
 }
 
 impl Builtin {
@@ -43,6 +44,11 @@ impl Builtin {
                 args,
             })),
 
+            "trim" => Ok(Ok(Builtin {
+                kind: Kind::Trim,
+                args,
+            })),
+
             _ => Ok(Err(FnCall(Box::new(Ast::Literal(res)), args))),
         }
     }
@@ -62,6 +68,7 @@ impl Builtin {
     pub fn run(self, state: &mut ShellState) -> builtin_impl::ChildResult {
         match self.kind {
             Kind::Split => builtin_impl::split(state, self.args),
+            Kind::Trim => builtin_impl::trim(state, self.args),
             _ => Err(builtin_impl::BuiltinError::ToplevelOnlyCommand),
         }
     }
@@ -165,5 +172,18 @@ pub mod builtin_impl {
             .filter(|x| !x.is_empty())
             .map(|x| x.into())
             .collect())
+    }
+
+    pub fn trim(state: &mut ShellState, args: Vec<Ast>) -> ChildResult {
+        if args.len() != 1 {
+            return Err(BuiltinError::UnexpectedNumberOfArgument {
+                expected: 1,
+                found: args.len() as _,
+            });
+        }
+
+        let value = args.into_iter().next().unwrap().run_get_string(state)?;
+
+        Ok(vec![value.trim().into()])
     }
 }
