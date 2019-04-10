@@ -128,27 +128,14 @@ pub mod builtin_impl {
     }
 
     pub fn exit(state: &mut ShellState, args: Vec<Ast>) -> TopLevelResult {
-        if !args.is_empty() {
-            return Err(BuiltinError::UnexpectedNumberOfArgument {
-                expected: 0,
-                found: args.len() as u32,
-            });
-        }
+        expect_num_args(&args, 0)?;
         state.running = false;
         Ok(true)
     }
 
     pub fn cd(state: &mut ShellState, args: Vec<Ast>) -> TopLevelResult {
-        use std::env;
-        if args.len() != 1 {
-            return Err(BuiltinError::UnexpectedNumberOfArgument {
-                expected: 1,
-                found: args.len() as u32,
-            });
-        }
-
-        let path = args.into_iter().next().unwrap().run_get_string(state)?;
-        match env::set_current_dir(path) {
+        let path = unwrap_one_arg(args)?.run_get_string(state)?;
+        match std::env::set_current_dir(path) {
             Ok(_) => Ok(true),
             Err(e) => {
                 print_err(e);
@@ -158,32 +145,32 @@ pub mod builtin_impl {
     }
 
     pub fn split(state: &mut ShellState, args: Vec<Ast>) -> ChildResult {
-        if args.len() != 1 {
-            return Err(BuiltinError::UnexpectedNumberOfArgument {
-                expected: 1,
-                found: args.len() as _,
-            });
-        }
-
-        let value = args.into_iter().next().unwrap().run_get_string(state)?;
-
+        let value = unwrap_one_arg(args)?.run_get_string(state)?;
         Ok(value
             .split('\n')
             .filter(|x| !x.is_empty())
-            .map(|x| x.into())
+            .map(|x| x.trim().into())
             .collect())
     }
 
     pub fn trim(state: &mut ShellState, args: Vec<Ast>) -> ChildResult {
-        if args.len() != 1 {
-            return Err(BuiltinError::UnexpectedNumberOfArgument {
+        let value = unwrap_one_arg(args)?.run_get_string(state)?;
+        Ok(vec![value.trim().into()])
+    }
+
+    fn expect_num_args(args: &[Ast], num: usize) -> Result<()> {
+        if args.len() != num {
+            Err(BuiltinError::UnexpectedNumberOfArgument {
                 expected: 1,
                 found: args.len() as _,
-            });
+            })
+        } else {
+            Ok(())
         }
+    }
 
-        let value = args.into_iter().next().unwrap().run_get_string(state)?;
-
-        Ok(vec![value.trim().into()])
+    fn unwrap_one_arg(args: Vec<Ast>) -> Result<Ast> {
+        expect_num_args(&args, 1)?;
+        Ok(args.into_iter().next().unwrap())
     }
 }
