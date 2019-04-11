@@ -6,13 +6,13 @@ mod parser;
 
 use std::env;
 use std::error;
-use std::io;
-use std::io::prelude::*;
 use std::result;
 
 use colored_print::color::ConsoleColor;
 use colored_print::colored_println;
 use log::debug;
+use rustyline::error::ReadlineError;
+use rustyline::Editor;
 
 use crate::parser::Parser;
 
@@ -34,11 +34,11 @@ impl ShellState {
 
 fn main() {
     env_logger::init();
-    let stdin = io::stdin();
-    let mut stdin = stdin.lock();
     let mut state = ShellState::new();
+    let mut rle = Editor::new();
+
     while state.running {
-        if let Err(e) = run_once(&mut state, &mut stdin) {
+        if let Err(e) = run_once(&mut state, &mut rle) {
             colored_println! {
                 true;
                 COLOR_ERROR, "error: ";
@@ -48,8 +48,8 @@ fn main() {
     }
 }
 
-fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
-    let line = prompt(stdin)?;
+fn run_once(state: &mut ShellState, rle: &mut Editor<()>) -> Result<()> {
+    let line = prompt(rle)?;
     let ast = Parser::from(line.trim()).parse()?;
     debug!("parser result: {:?}", ast);
     let res = ast.run_toplevel(state)?;
@@ -61,11 +61,17 @@ fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
     Ok(())
 }
 
-fn prompt(stdin: &mut io::StdinLock) -> Result<String> {
-    print!("{} $ ", env::current_dir()?.display());
-    io::stdout().flush().unwrap();
-    let mut line = String::new();
-    stdin.read_line(&mut line).unwrap();
+fn prompt(rle: &mut Editor<()>) -> Result<String> {
+    let readline = rle.readline(&format!("{} $ ", env::current_dir()?.display()));
 
-    Ok(line)
+    match readline {
+        Ok(line) => {
+            rle.add_history_entry(&*line);
+            Ok(line)
+        }
+
+        Err(ReadlineError::Interrupted) => Ok("".into()),
+        Err(ReadlineError::Eof) => Ok("exit".into()),
+        Err(e) => Err(Box::new(e)),
+    }
 }
