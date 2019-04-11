@@ -49,10 +49,7 @@ fn main() {
 }
 
 fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
-    print!("{} $ ", env::current_dir()?.display());
-    io::stdout().flush().unwrap();
-    let mut line = String::new();
-    stdin.read_line(&mut line).unwrap();
+    let line = prompt(stdin)?;
     let ast = Parser::from(line.trim()).parse()?;
     debug!("parser result: {:?}", ast);
     let res = ast.run_toplevel(state)?;
@@ -62,4 +59,13 @@ fn run_once(state: &mut ShellState, stdin: &mut io::StdinLock) -> Result<()> {
         ConsoleColor::Reset, " {}", res;
     }
     Ok(())
+}
+
+fn prompt(stdin: &mut io::StdinLock) -> Result<String> {
+    print!("{} $ ", env::current_dir()?.display());
+    io::stdout().flush().unwrap();
+    let mut line = String::new();
+    stdin.read_line(&mut line).unwrap();
+
+    Ok(line)
 }
