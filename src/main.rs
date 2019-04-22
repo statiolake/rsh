@@ -3,6 +3,7 @@ mod builtin;
 mod exec;
 mod fncall;
 mod parser;
+mod rustyline_helper;
 
 use std::env;
 use std::error;
@@ -12,9 +13,10 @@ use colored_print::color::ConsoleColor;
 use colored_print::colored_println;
 use log::debug;
 use rustyline::error::ReadlineError;
-use rustyline::Editor;
+use rustyline::{CompletionType, Config, EditMode, Editor, OutputStreamType};
 
 use crate::parser::Parser;
+use crate::rustyline_helper::Helper;
 
 pub const COLOR_ERROR: ConsoleColor = ConsoleColor::Red;
 pub const COLOR_INFO: ConsoleColor = ConsoleColor::Cyan;
@@ -34,8 +36,19 @@ impl ShellState {
 
 fn main() {
     env_logger::init();
+
     let mut state = ShellState::new();
-    let mut rle = Editor::new();
+
+    let config = Config::builder()
+        .history_ignore_space(true)
+        .completion_type(CompletionType::List)
+        .edit_mode(EditMode::Emacs)
+        .output_stream(OutputStreamType::Stdout)
+        .build();
+
+    let mut rle = Editor::with_config(config);
+
+    rle.set_helper(Some(Helper::new()));
 
     while state.running {
         if let Err(e) = run_once(&mut state, &mut rle) {
@@ -48,7 +61,7 @@ fn main() {
     }
 }
 
-fn run_once(state: &mut ShellState, rle: &mut Editor<()>) -> Result<()> {
+fn run_once(state: &mut ShellState, rle: &mut Editor<Helper>) -> Result<()> {
     let line = prompt(rle)?;
     let ast = Parser::from(line.trim()).parse()?;
     debug!("parser result: {:?}", ast);
@@ -61,7 +74,7 @@ fn run_once(state: &mut ShellState, rle: &mut Editor<()>) -> Result<()> {
     Ok(())
 }
 
-fn prompt(rle: &mut Editor<()>) -> Result<String> {
+fn prompt(rle: &mut Editor<Helper>) -> Result<String> {
     let readline = rle.readline(&format!("{} $ ", env::current_dir()?.display()));
 
     match readline {
