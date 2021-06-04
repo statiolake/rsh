@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use rustyline::completion::{Completer, FilenameCompleter};
 use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
 use rustyline::hint::{Hinter, HistoryHinter};
+use rustyline::validate::Validator;
 use rustyline::{Context, Result};
 
 pub struct Helper {
@@ -34,6 +35,7 @@ impl Completer for Helper {
 }
 
 impl Hinter for Helper {
+    type Hint = String;
     fn hint(&self, line: &str, pos: usize, ctx: &Context) -> Option<String> {
         self.history_hinter.hint(line, pos, ctx)
     }
@@ -44,5 +46,7 @@ impl Highlighter for Helper {
         self.matching_bracket_highlighter.highlight(line, pos)
     }
 }
+
+impl Validator for Helper {}
 
 impl rustyline::Helper for Helper {}
