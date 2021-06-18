@@ -1,8 +1,10 @@
 use std::result;
 
 use crate::ast::Ast;
-pub use crate::ast::Result;
+use crate::ast::Result;
 use crate::fncall::FnCall;
+use crate::print_macros::COLOR_RESET;
+use crate::println;
 use crate::ShellState;
 
 #[derive(Debug)]
@@ -59,7 +61,7 @@ impl Builtin {
             Kind::Cd => builtin_impl::cd(state, self.args),
             _ => {
                 let result = self.run(state)?;
-                println!("{:?}", result);
+                println!(COLOR_RESET => "{:?}", result);
                 Ok(true)
             }
         }
@@ -75,10 +77,11 @@ impl Builtin {
 }
 
 pub mod builtin_impl {
-    use std::{error, fmt, result};
-
     use crate::ast::{Ast, AstError};
+    use crate::print_macros::{COLOR_ERROR, COLOR_RESET};
+    use crate::println;
     use crate::ShellState;
+    use std::{error, fmt, result};
 
     type Result<T> = result::Result<T, BuiltinError>;
     pub type TopLevelResult = Result<bool>;
@@ -117,13 +120,9 @@ pub mod builtin_impl {
     impl error::Error for BuiltinError {}
 
     fn print_err(msg: impl fmt::Display) {
-        use crate::COLOR_ERROR;
-        use colored_print::color::ConsoleColor;
-        use colored_print::colored_println;
-        colored_println! {
-            true;
-            COLOR_ERROR, "error:";
-            ConsoleColor::Reset, " {}", msg;
+        println! {
+            COLOR_ERROR => "error:";
+            COLOR_RESET => " {}", msg;
         }
     }
 

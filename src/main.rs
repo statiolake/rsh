@@ -3,23 +3,18 @@ mod builtin;
 mod exec;
 mod fncall;
 mod parser;
+mod print_macros;
 mod rustyline_helper;
 
-use std::env;
-use std::error;
-use std::result;
-
-use colored_print::color::ConsoleColor;
-use colored_print::colored_println;
+use crate::parser::Parser;
+use crate::print_macros::{COLOR_ERROR, COLOR_INFO, COLOR_RESET};
+use crate::rustyline_helper::Helper;
 use log::debug;
 use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, EditMode, Editor, OutputStreamType};
-
-use crate::parser::Parser;
-use crate::rustyline_helper::Helper;
-
-pub const COLOR_ERROR: ConsoleColor = ConsoleColor::Red;
-pub const COLOR_INFO: ConsoleColor = ConsoleColor::Cyan;
+use std::env;
+use std::error;
+use std::result;
 
 pub type Result<T> = result::Result<T, Box<dyn error::Error>>;
 
@@ -52,10 +47,9 @@ fn main() {
 
     while state.running {
         if let Err(e) = run_once(&mut state, &mut rle) {
-            colored_println! {
-                true;
-                COLOR_ERROR, "error: ";
-                ConsoleColor::Reset, "{}", e;
+            println! {
+                COLOR_ERROR => "error: ";
+                COLOR_RESET => "{}", e;
             }
         }
     }
@@ -66,11 +60,11 @@ fn run_once(state: &mut ShellState, rle: &mut Editor<Helper>) -> Result<()> {
     let ast = Parser::from(line.trim()).parse()?;
     debug!("parser result: {:?}", ast);
     let res = ast.run_toplevel(state)?;
-    colored_println! {
-        true;
-        COLOR_INFO, "result:";
-        ConsoleColor::Reset, " {}", res;
-    }
+    println! {
+        COLOR_INFO => "result:";
+        COLOR_RESET => " {}", res;
+    };
+
     Ok(())
 }
 
