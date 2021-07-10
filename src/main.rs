@@ -1,3 +1,8 @@
+mod shell;
+
+use shell::Shell;
+
 fn main() {
-    println!("Hello, world!");
+    let mut shell = Shell::new();
+    shell.mainloop();
 }
