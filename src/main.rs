@@ -1,3 +1,4 @@
+mod line_parser;
 mod shell;
 
 use shell::Shell;

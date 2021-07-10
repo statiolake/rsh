@@ -1,6 +1,6 @@
+use crate::line_parser::LineParser;
 use anyhow::ensure;
 use anyhow::Result;
-use itertools::Itertools;
 use std::env::current_dir;
 use std::ffi::OsStr;
 use std::fmt::Display;
@@ -29,13 +29,13 @@ impl Shell {
     }
 
     pub fn read_and_run(&mut self) -> Result<()> {
-        let command = read_line()?;
-        let command = command.split_whitespace().collect_vec();
-        self.run_command(command)?;
+        let cmdline = read_line()?;
+        let args = parse_cmdline(&cmdline)?;
+        self.run_args(args)?;
         Ok(())
     }
 
-    fn run_command<S: AsRef<OsStr> + AsRef<str>>(&mut self, mut args: Vec<S>) -> Result<()> {
+    fn run_args<S: AsRef<OsStr> + AsRef<str>>(&mut self, mut args: Vec<S>) -> Result<()> {
         // if empty, do nothing.
         if args.is_empty() {
             return Ok(());
@@ -69,4 +69,8 @@ fn read_line() -> Result<String> {
     let mut buf = String::new();
     stdin().read_line(&mut buf)?;
     Ok(buf)
+}
+
+fn parse_cmdline(cmdline: &str) -> Result<Vec<String>> {
+    LineParser::new(cmdline).parse()
 }
