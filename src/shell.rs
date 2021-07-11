@@ -1,8 +1,7 @@
 use crate::line_parser::LineParser;
 use anyhow::ensure;
 use anyhow::Result;
-use std::env::current_dir;
-use std::ffi::OsStr;
+use std::env;
 use std::fmt::Display;
 use std::io::prelude::*;
 use std::io::{stdin, stdout};
@@ -35,20 +34,17 @@ impl Shell {
         Ok(())
     }
 
-    fn run_args<S: AsRef<OsStr> + AsRef<str>>(&mut self, mut args: Vec<S>) -> Result<()> {
+    fn run_args(&mut self, mut args: Vec<String>) -> Result<()> {
         // if empty, do nothing.
         if args.is_empty() {
             return Ok(());
         }
 
         let cmd = args.remove(0);
-        let cmd: &str = cmd.as_ref();
 
-        // handle exit
-        if cmd == "exit" {
-            ensure!(args.is_empty(), "exit does not take additional argument.");
-            self.loop_running = false;
-            return Ok(());
+        // handle builtins
+        if let Some(res) = self.handle_builtins(&cmd, &args) {
+            return res;
         }
 
         let mut child = Command::new(cmd).args(&args).spawn()?;
@@ -63,7 +59,7 @@ fn print_error<D: Display>(err: D) {
 
 fn read_line() -> Result<String> {
     // show prompt
-    print!("{} $ ", current_dir()?.display());
+    print!("{} $ ", env::current_dir()?.display());
     stdout().flush()?;
 
     let mut buf = String::new();
@@ -73,4 +69,27 @@ fn read_line() -> Result<String> {
 
 fn parse_cmdline(cmdline: &str) -> Result<Vec<String>> {
     LineParser::new(cmdline).parse()
+}
+
+// builtin functions
+impl Shell {
+    pub fn handle_builtins(&mut self, cmd: &str, args: &[String]) -> Option<Result<()>> {
+        match cmd {
+            "exit" => Some(self.builtin_exit(args)),
+            "cd" => Some(self.builtin_cd(args)),
+            _ => None,
+        }
+    }
+
+    pub fn builtin_exit(&mut self, args: &[String]) -> Result<()> {
+        ensure!(args.is_empty(), "exit: does not take additional argument");
+        self.loop_running = false;
+        Ok(())
+    }
+
+    pub fn builtin_cd(&mut self, args: &[String]) -> Result<()> {
+        ensure!(args.len() == 1, "cd: requires exact one argument");
+        env::set_current_dir(&args[0])?;
+        Ok(())
+    }
 }
