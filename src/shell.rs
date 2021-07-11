@@ -3,8 +3,6 @@ use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use std::env;
 use std::fmt::Display;
-use std::io::prelude::*;
-use std::io::{stdin, stdout};
 use std::path::PathBuf;
 use std::process::Command;
 use which::which;
@@ -49,7 +47,7 @@ impl Shell {
             return res;
         }
 
-        let cmd = resolve_cmd(&cmd)?;
+        let cmd = resolve_cmd(&cmd).map_err(|e| anyhow!("{}: {}", cmd, e))?;
         let mut child = Command::new(cmd).args(&args).spawn()?;
         child.wait()?;
         Ok(())
@@ -61,13 +59,14 @@ fn print_error<D: Display>(err: D) {
 }
 
 fn read_line() -> Result<String> {
-    // show prompt
-    print!("{} $ ", env::current_dir()?.display());
-    stdout().flush()?;
+    use rustyline::error::ReadlineError;
+    use rustyline::Editor;
 
-    let mut buf = String::new();
-    stdin().read_line(&mut buf)?;
-    Ok(buf)
+    let mut rl = Editor::<()>::new();
+    match rl.readline(&format!("{} $ ", env::current_dir()?.display())) {
+        Err(ReadlineError::Eof) => Ok("exit".to_string()),
+        res => res.map_err(Into::into),
+    }
 }
 
 fn parse_cmdline(cmdline: &str) -> Result<Vec<String>> {
