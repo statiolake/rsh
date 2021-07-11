@@ -1,9 +1,12 @@
 mod line_parser;
 mod shell;
 
+use anyhow::Result;
 use shell::Shell;
 
-fn main() {
-    let mut shell = Shell::new();
+fn main() -> Result<()> {
+    let mut shell = Shell::new()?;
     shell.mainloop();
+
+    Ok(())
 }

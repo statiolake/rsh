@@ -1,21 +1,29 @@
 use crate::line_parser::LineParser;
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
+use rustyline::Editor;
 use std::env;
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use which::which;
 
+const HISTORY_FILE: &str = ".rsh_history";
+
 pub struct Shell {
     loop_running: bool,
+    rl: Editor<()>,
 }
 
 impl Shell {
-    pub fn new() -> Shell {
-        Shell {
+    pub fn new() -> Result<Shell> {
+        let mut rl = Editor::new();
+        let _ = rl.load_history(&history_path()?);
+
+        Ok(Shell {
             loop_running: false,
-        }
+            rl,
+        })
     }
 
     pub fn mainloop(&mut self) {
@@ -28,7 +36,7 @@ impl Shell {
     }
 
     pub fn read_and_run(&mut self) -> Result<()> {
-        let cmdline = read_line()?;
+        let cmdline = self.read_line()?;
         let args = parse_cmdline(&cmdline)?;
         self.run_args(args)?;
         Ok(())
@@ -52,21 +60,34 @@ impl Shell {
         child.wait()?;
         Ok(())
     }
+
+    fn read_line(&mut self) -> Result<String> {
+        use rustyline::error::ReadlineError;
+        let prompt = format!("{} $ ", env::current_dir()?.display());
+        let line = match self.rl.readline(&prompt) {
+            Err(ReadlineError::Eof) => "exit".to_string(),
+            res => res?,
+        };
+        self.rl.add_history_entry(&line);
+        let _ = self
+            .rl
+            .save_history(&history_path().expect("must be checked before"));
+        Ok(line)
+    }
+}
+
+fn path_under_home(path: &Path) -> Result<PathBuf> {
+    let home_dir =
+        dirs::home_dir().ok_or_else(|| anyhow!("failed to determine user home directory"))?;
+    Ok(home_dir.join(path))
+}
+
+fn history_path() -> Result<PathBuf> {
+    path_under_home(Path::new(HISTORY_FILE))
 }
 
 fn print_error<D: Display>(err: D) {
     eprintln!("rsh: {}", err);
-}
-
-fn read_line() -> Result<String> {
-    use rustyline::error::ReadlineError;
-    use rustyline::Editor;
-
-    let mut rl = Editor::<()>::new();
-    match rl.readline(&format!("{} $ ", env::current_dir()?.display())) {
-        Err(ReadlineError::Eof) => Ok("exit".to_string()),
-        res => res.map_err(Into::into),
-    }
 }
 
 fn parse_cmdline(cmdline: &str) -> Result<Vec<String>> {
