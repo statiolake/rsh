@@ -1,11 +1,13 @@
 use crate::line_parser::LineParser;
-use anyhow::ensure;
 use anyhow::Result;
+use anyhow::{anyhow, ensure};
 use std::env;
 use std::fmt::Display;
 use std::io::prelude::*;
 use std::io::{stdin, stdout};
+use std::path::PathBuf;
 use std::process::Command;
+use which::which;
 
 pub struct Shell {
     loop_running: bool,
@@ -47,6 +49,7 @@ impl Shell {
             return res;
         }
 
+        let cmd = resolve_cmd(&cmd)?;
         let mut child = Command::new(cmd).args(&args).spawn()?;
         child.wait()?;
         Ok(())
@@ -69,6 +72,10 @@ fn read_line() -> Result<String> {
 
 fn parse_cmdline(cmdline: &str) -> Result<Vec<String>> {
     LineParser::new(cmdline).parse()
+}
+
+fn resolve_cmd(cmd: &str) -> Result<PathBuf> {
+    which(cmd).map_err(|err| anyhow!("{}", err))
 }
 
 // builtin functions

@@ -8,3 +8,4 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0.41"
 itertools = "0.10.1"
+which = "4.1.0"
