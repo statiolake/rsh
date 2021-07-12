@@ -1,11 +1,14 @@
+use crate::ctrlc_handler::register_child_process;
 use crate::line_parser::LineParser;
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use rustyline::Editor;
+use shared_child::SharedChild;
 use std::env;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use which::which;
 
 const HISTORY_FILE: &str = ".rsh_history";
@@ -55,10 +58,9 @@ impl Shell {
             return res;
         }
 
+        // resolve command and run it as an external command
         let cmd = resolve_cmd(&cmd).map_err(|e| anyhow!("{}: {}", cmd, e))?;
-        let mut child = Command::new(cmd).args(&args).spawn()?;
-        child.wait()?;
-        Ok(())
+        self.execute_external(&cmd, &args)
     }
 
     fn read_line(&mut self) -> Result<String> {
@@ -73,6 +75,17 @@ impl Shell {
             .rl
             .save_history(&history_path().expect("must be checked before"));
         Ok(line)
+    }
+
+    fn execute_external(&mut self, cmd: &Path, args: &[String]) -> Result<()> {
+        let child = SharedChild::spawn(Command::new(cmd).args(args))?;
+        let child = Arc::new(child);
+
+        // register Ctrl+C handler to kill the child.
+        register_child_process(Arc::downgrade(&child));
+        child.wait()?;
+
+        Ok(())
     }
 }
 
