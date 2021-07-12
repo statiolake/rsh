@@ -125,7 +125,29 @@ impl<'a> ArgParser<'a> {
                     _ => bail!("unknown escape sequence: ^{}", next),
                 }
             }
+            '$' if !self.in_single => self.parse_arg_atom_var(),
             _ => Ok(ArgAtom::Char(ch)),
         }
+    }
+
+    fn parse_arg_atom_var(&mut self) -> Result<ArgAtom> {
+        let brace_end = self.cursor.peek() == Some('{');
+        if brace_end {
+            assert_eq!(self.cursor.next(), Some('{'));
+        }
+
+        let mut name = String::new();
+        loop {
+            match self.cursor.next() {
+                None if brace_end => bail!("unexpected end during parsing variable name"),
+                Some('}') if brace_end => break,
+                None => break,
+                Some(ch) if !brace_end && ch.is_whitespace() => break,
+                Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => name.push(ch),
+                _ => bail!("variable name may only contain alphabet or underscore"),
+            }
+        }
+
+        Ok(ArgAtom::Var(name))
     }
 }

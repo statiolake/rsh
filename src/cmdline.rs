@@ -1,4 +1,5 @@
 use itertools::Itertools as _;
+use std::env;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -53,7 +54,12 @@ impl fmt::Display for ArgAtom {
     fn fmt(&self, b: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ArgAtom::Char(ch) => write!(b, "{}", ch),
-            ArgAtom::Var(_) => todo!(),
+            ArgAtom::Var(name) => {
+                if let Ok(value) = env::var(name) {
+                    write!(b, "{}", value)?;
+                }
+                Ok(())
+            }
         }
     }
 }
