@@ -8,49 +8,58 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    fn new(s: &str) -> Self {
+    pub fn new(s: &str) -> Self {
         Self {
             reversed: s.chars().rev().collect_vec(),
         }
     }
 
-    fn peek(&self) -> Option<char> {
+    pub fn peek(&self) -> Option<char> {
         self.reversed.last().copied()
     }
 
-    fn next(&mut self) -> Option<char> {
+    pub fn next(&mut self) -> Option<char> {
         self.reversed.pop()
     }
 
-    fn skip_whitespace(&mut self) {
+    pub fn skip_whitespace(&mut self) {
         while self.peek().map(char::is_whitespace).unwrap_or(false) {
             self.next();
         }
     }
 
-    fn is_finished(&self) -> bool {
+    pub fn is_finished(&self) -> bool {
         self.reversed.is_empty()
     }
 }
 
-pub struct ArgsParser {
-    cursor: Cursor,
+pub struct ArgsParser<'a> {
+    cursor: &'a mut Cursor,
 }
 
-impl ArgsParser {
-    pub fn new(s: &str) -> Self {
-        Self {
-            cursor: Cursor::new(s),
-        }
+impl<'a> ArgsParser<'a> {
+    pub fn new(cursor: &'a mut Cursor) -> Self {
+        Self { cursor }
     }
 
     pub fn parse_args(&mut self) -> Result<Vec<Arg>> {
         let mut args = vec![];
-        while !self.cursor.is_finished() {
+        loop {
             self.cursor.skip_whitespace();
+
+            match self.cursor.peek() {
+                // All of the input is read.
+                None => break,
+
+                // The endmarker of (possible) parent invocation.
+                Some(')') => break,
+
+                // Otherwise continue parsing in this level.
+                _ => {}
+            }
+
             let arg = self.parse_arg()?;
             args.push(arg);
-            self.cursor.skip_whitespace();
         }
 
         Ok(args)
@@ -83,6 +92,10 @@ impl<'a> ArgParser<'a> {
             let ch = match self.cursor.peek() {
                 None => {
                     ensure!(!self.in_single, "single quote is not closed");
+                    ensure!(!self.in_double, "double quote is not closed");
+                    return Ok(Arg::new(self.atoms));
+                }
+                Some(')') if !self.in_single => {
                     ensure!(!self.in_double, "double quote is not closed");
                     return Ok(Arg::new(self.atoms));
                 }
@@ -125,9 +138,19 @@ impl<'a> ArgParser<'a> {
                     _ => bail!("unknown escape sequence: ^{}", next),
                 }
             }
-            '$' if !self.in_single => self.parse_arg_atom_var(),
+            '$' if !self.in_single => match self.cursor.peek() {
+                Some('(') => self.parse_arg_atom_cmd(),
+                _ => self.parse_arg_atom_var(),
+            },
             _ => Ok(ArgAtom::Char(ch)),
         }
+    }
+
+    fn parse_arg_atom_cmd(&mut self) -> Result<ArgAtom> {
+        assert_eq!(self.cursor.next(), Some('('));
+        let args = ArgsParser::new(&mut self.cursor).parse_args()?;
+        ensure!(self.cursor.next() == Some(')'), "no matching ')' found");
+        Ok(ArgAtom::Cmd(args))
     }
 
     fn parse_arg_atom_var(&mut self) -> Result<ArgAtom> {

@@ -1,6 +1,6 @@
 use crate::cmdline::*;
 use crate::ctrlc_handler::register_child_process;
-use crate::line_parser::ArgsParser;
+use crate::line_parser::{ArgsParser, Cursor};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use rustyline::Editor;
@@ -103,7 +103,10 @@ fn print_error<D: Display>(err: D) {
 }
 
 fn parse_cmdline(cmdline: &str) -> Result<Vec<Arg>> {
-    ArgsParser::new(cmdline).parse_args()
+    let mut cursor = Cursor::new(cmdline);
+    let args = ArgsParser::new(&mut cursor).parse_args()?;
+    ensure!(cursor.is_finished(), "input was not entirely read");
+    Ok(args)
 }
 
 fn resolve_cmd(cmd: &Arg) -> Result<CommandKind> {

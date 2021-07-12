@@ -30,6 +30,7 @@ pub struct Arg {
 pub enum ArgAtom {
     Char(char),
     Var(String),
+    Cmd(Vec<Arg>),
 }
 
 impl CommandLine {
@@ -60,6 +61,7 @@ impl fmt::Display for ArgAtom {
                 }
                 Ok(())
             }
+            ArgAtom::Cmd(_) => todo!(),
         }
     }
 }
