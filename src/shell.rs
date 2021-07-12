@@ -1,5 +1,6 @@
+use crate::cmdline::*;
 use crate::ctrlc_handler::register_child_process;
-use crate::line_parser::LineParser;
+use crate::line_parser::ArgsParser;
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use rustyline::Editor;
@@ -40,27 +41,24 @@ impl Shell {
 
     pub fn read_and_run(&mut self) -> Result<()> {
         let cmdline = self.read_line()?;
-        let args = parse_cmdline(&cmdline)?;
-        self.run_args(args)?;
-        Ok(())
-    }
+        let mut args = parse_cmdline(&cmdline)?;
 
-    fn run_args(&mut self, mut args: Vec<String>) -> Result<()> {
-        // if empty, do nothing.
+        // if arguments are empty, do nothing.
         if args.is_empty() {
             return Ok(());
         }
 
-        let cmd = args.remove(0);
+        let cmd = resolve_cmd(&args.remove(0))?;
+        let cmdline = CommandLine::new(cmd, args);
+        self.run_cmdline(&cmdline)?;
+        Ok(())
+    }
 
-        // handle builtins
-        if let Some(res) = self.handle_builtins(&cmd, &args) {
-            return res;
+    fn run_cmdline(&mut self, cmdline: &CommandLine) -> Result<()> {
+        match &cmdline.cmd {
+            CommandKind::Builtin(cmd) => self.execute_builtin(*cmd, &cmdline.args),
+            CommandKind::External(cmd) => self.execute_external(cmd, &cmdline.args),
         }
-
-        // resolve command and run it as an external command
-        let cmd = resolve_cmd(&cmd).map_err(|e| anyhow!("{}: {}", cmd, e))?;
-        self.execute_external(&cmd, &args)
     }
 
     fn read_line(&mut self) -> Result<String> {
@@ -77,7 +75,8 @@ impl Shell {
         Ok(line)
     }
 
-    fn execute_external(&mut self, cmd: &Path, args: &[String]) -> Result<()> {
+    fn execute_external(&mut self, cmd: &Path, args: &[Arg]) -> Result<()> {
+        let args = args.iter().map(|arg| arg.to_string());
         let child = SharedChild::spawn(Command::new(cmd).args(args))?;
         let child = Arc::new(child);
 
@@ -103,33 +102,38 @@ fn print_error<D: Display>(err: D) {
     eprintln!("rsh: {}", err);
 }
 
-fn parse_cmdline(cmdline: &str) -> Result<Vec<String>> {
-    LineParser::new(cmdline).parse()
+fn parse_cmdline(cmdline: &str) -> Result<Vec<Arg>> {
+    ArgsParser::new(cmdline).parse_args()
 }
 
-fn resolve_cmd(cmd: &str) -> Result<PathBuf> {
-    which(cmd).map_err(|err| anyhow!("{}", err))
+fn resolve_cmd(cmd: &Arg) -> Result<CommandKind> {
+    match &*cmd.to_string() {
+        "exit" => Ok(CommandKind::Builtin(BuiltinCommand::Exit)),
+        "cd" => Ok(CommandKind::Builtin(BuiltinCommand::Cd)),
+        cmd => which(cmd)
+            .map(CommandKind::External)
+            .map_err(|err| anyhow!("{}", err)),
+    }
 }
 
 // builtin functions
 impl Shell {
-    pub fn handle_builtins(&mut self, cmd: &str, args: &[String]) -> Option<Result<()>> {
+    pub fn execute_builtin(&mut self, cmd: BuiltinCommand, args: &[Arg]) -> Result<()> {
         match cmd {
-            "exit" => Some(self.builtin_exit(args)),
-            "cd" => Some(self.builtin_cd(args)),
-            _ => None,
+            BuiltinCommand::Exit => self.builtin_exit(args),
+            BuiltinCommand::Cd => self.builtin_cd(args),
         }
     }
 
-    pub fn builtin_exit(&mut self, args: &[String]) -> Result<()> {
+    pub fn builtin_exit(&mut self, args: &[Arg]) -> Result<()> {
         ensure!(args.is_empty(), "exit: does not take additional argument");
         self.loop_running = false;
         Ok(())
     }
 
-    pub fn builtin_cd(&mut self, args: &[String]) -> Result<()> {
+    pub fn builtin_cd(&mut self, args: &[Arg]) -> Result<()> {
         ensure!(args.len() == 1, "cd: requires exact one argument");
-        env::set_current_dir(&args[0])?;
+        env::set_current_dir(&args[0].to_string())?;
         Ok(())
     }
 }

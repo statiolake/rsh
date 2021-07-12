@@ -1,3 +1,4 @@
+mod cmdline;
 mod ctrlc_handler;
 mod line_parser;
 mod shell;

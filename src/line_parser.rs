@@ -1,36 +1,25 @@
+use crate::cmdline::{Arg, ArgAtom};
 use anyhow::Result;
 use anyhow::{bail, ensure};
 use itertools::Itertools;
 
-pub struct LineParser {
-    rest_reversed: Vec<char>,
+pub struct Cursor {
+    reversed: Vec<char>,
 }
 
-impl LineParser {
-    pub fn new(s: &str) -> Self {
+impl Cursor {
+    fn new(s: &str) -> Self {
         Self {
-            rest_reversed: s.chars().rev().collect_vec(),
+            reversed: s.chars().rev().collect_vec(),
         }
-    }
-
-    pub fn parse(&mut self) -> Result<Vec<String>> {
-        let mut args = vec![];
-        while !self.rest_reversed.is_empty() {
-            self.skip_whitespace();
-            let arg = self.parse_arg()?;
-            args.push(arg);
-            self.skip_whitespace();
-        }
-
-        Ok(args)
     }
 
     fn peek(&self) -> Option<char> {
-        self.rest_reversed.last().copied()
+        self.reversed.last().copied()
     }
 
     fn next(&mut self) -> Option<char> {
-        self.rest_reversed.pop()
+        self.reversed.pop()
     }
 
     fn skip_whitespace(&mut self) {
@@ -39,44 +28,104 @@ impl LineParser {
         }
     }
 
-    fn parse_arg(&mut self) -> Result<String> {
-        let mut in_single_quote = false;
-        let mut in_double_quote = false;
-        let mut arg = String::new();
+    fn is_finished(&self) -> bool {
+        self.reversed.is_empty()
+    }
+}
 
+pub struct ArgsParser {
+    cursor: Cursor,
+}
+
+impl ArgsParser {
+    pub fn new(s: &str) -> Self {
+        Self {
+            cursor: Cursor::new(s),
+        }
+    }
+
+    pub fn parse_args(&mut self) -> Result<Vec<Arg>> {
+        let mut args = vec![];
+        while !self.cursor.is_finished() {
+            self.cursor.skip_whitespace();
+            let arg = self.parse_arg()?;
+            args.push(arg);
+            self.cursor.skip_whitespace();
+        }
+
+        Ok(args)
+    }
+
+    fn parse_arg(&mut self) -> Result<Arg> {
+        ArgParser::new(&mut self.cursor).parse_arg()
+    }
+}
+
+pub struct ArgParser<'a> {
+    cursor: &'a mut Cursor,
+    in_single: bool,
+    in_double: bool,
+    atoms: Vec<ArgAtom>,
+}
+
+impl<'a> ArgParser<'a> {
+    fn new(cursor: &'a mut Cursor) -> Self {
+        Self {
+            cursor,
+            in_single: false,
+            in_double: false,
+            atoms: vec![],
+        }
+    }
+
+    fn parse_arg(mut self) -> Result<Arg> {
         loop {
-            let ch = match self.next() {
+            let ch = match self.cursor.peek() {
                 None => {
-                    ensure!(!in_single_quote, "single quote is not closed");
-                    ensure!(!in_double_quote, "double quote is not closed");
-                    return Ok(arg);
+                    ensure!(!self.in_single, "single quote is not closed");
+                    ensure!(!self.in_double, "double quote is not closed");
+                    return Ok(Arg::new(self.atoms));
+                }
+                Some(ch) if ch.is_whitespace() && (!self.in_single && !self.in_double) => {
+                    return Ok(Arg::new(self.atoms));
                 }
                 Some(ch) => ch,
             };
 
             match ch {
-                '"' if !in_single_quote => in_double_quote = !in_double_quote,
-                '\'' if !in_double_quote => in_single_quote = !in_single_quote,
-                '^' if !in_single_quote => {
-                    let next = match self.next() {
-                        Some(ch) => ch,
-                        None => bail!("unexpected eol after escape `^`"),
-                    };
-                    match next {
-                        '"' => arg.push('"'),
-                        'n' => arg.push('\n'),
-                        't' => arg.push('\t'),
-                        ' ' => arg.push(' '),
-                        _ => bail!("unknown escape sequence: ^{}", next),
-                    }
+                '"' if !self.in_single => {
+                    assert_eq!(self.cursor.next(), Some('"'));
+                    self.in_double = !self.in_double;
                 }
-                _ if (!in_double_quote && !in_single_quote) && ch.is_whitespace() => {
-                    return Ok(arg);
+                '\'' if !self.in_double => {
+                    assert_eq!(self.cursor.next(), Some('\''));
+                    self.in_single = !self.in_single;
                 }
                 _ => {
-                    arg.push(ch);
+                    let atom = self.parse_arg_atom()?;
+                    self.atoms.push(atom);
                 }
             }
+        }
+    }
+
+    fn parse_arg_atom(&mut self) -> Result<ArgAtom> {
+        let ch = self.cursor.next().expect("there must be at least one char");
+        match ch {
+            '^' if !self.in_single => {
+                let next = match self.cursor.next() {
+                    Some(ch) => ch,
+                    None => bail!("unexpected eol after escape `^`"),
+                };
+                match next {
+                    '"' => Ok(ArgAtom::Char('"')),
+                    'n' => Ok(ArgAtom::Char('\n')),
+                    't' => Ok(ArgAtom::Char('\t')),
+                    ' ' => Ok(ArgAtom::Char(' ')),
+                    _ => bail!("unknown escape sequence: ^{}", next),
+                }
+            }
+            _ => Ok(ArgAtom::Char(ch)),
         }
     }
 }
