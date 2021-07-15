@@ -1,13 +1,7 @@
-use itertools::Itertools as _;
-use std::env;
-use std::fmt;
+use anyhow::Result;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
-pub struct CommandLine {
-    pub cmd: CommandKind,
-    pub args: Vec<Arg>,
-}
+use crate::shell::Shell;
 
 #[derive(Debug, Clone)]
 pub enum CommandKind {
@@ -22,46 +16,72 @@ pub enum BuiltinCommand {
 }
 
 #[derive(Debug, Clone)]
-pub struct Arg {
+pub struct Args {
     atoms: Vec<ArgAtom>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ArgAtom {
+    Delim,
     Char(char),
     Var(String),
-    Cmd(Vec<Arg>),
+    Cmd(Args),
 }
 
-impl CommandLine {
-    pub fn new(cmd: CommandKind, args: Vec<Arg>) -> Self {
-        Self { cmd, args }
+impl Args {
+    pub fn from_atoms(atoms: Vec<ArgAtom>) -> Self {
+        Self { atoms }
     }
-}
 
-impl Arg {
-    pub fn new(atoms: Vec<ArgAtom>) -> Arg {
-        Arg { atoms }
-    }
-}
-
-impl fmt::Display for Arg {
-    fn fmt(&self, b: &mut fmt::Formatter) -> fmt::Result {
-        write!(b, "{}", self.atoms.iter().format(""))
-    }
-}
-
-impl fmt::Display for ArgAtom {
-    fn fmt(&self, b: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ArgAtom::Char(ch) => write!(b, "{}", ch),
-            ArgAtom::Var(name) => {
-                if let Ok(value) = env::var(name) {
-                    write!(b, "{}", value)?;
+    pub fn flatten(&self, shell: &mut Shell) -> Result<Args> {
+        let mut atoms = vec![];
+        for atom in &self.atoms {
+            match atom {
+                ArgAtom::Cmd(args) => {
+                    let output = str_to_atoms(&shell.run_args_captured(&args)?);
+                    atoms.extend(output);
                 }
-                Ok(())
+                other => {
+                    atoms.push(other.clone());
+                }
             }
-            ArgAtom::Cmd(_) => todo!(),
         }
+
+        Ok(Self::from_atoms(atoms))
     }
+
+    pub fn to_vec(&self, shell: &Shell) -> Vec<String> {
+        self.atoms
+            .split(ArgAtom::is_delim)
+            .map(|arg| {
+                arg.iter()
+                    .map(|atom| match atom {
+                        ArgAtom::Delim => unreachable!("found delimiter after splitting"),
+                        ArgAtom::Char(ch) => ch.to_string(),
+                        ArgAtom::Var(name) => shell.var(name).unwrap_or_else(String::new),
+                        ArgAtom::Cmd(_) => panic!("to_vec() called on unflattened args"),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+impl ArgAtom {
+    fn is_delim(&self) -> bool {
+        matches!(self, ArgAtom::Delim)
+    }
+}
+
+/// Break output to lines and parse them as an atom
+fn str_to_atoms(out: &str) -> Vec<ArgAtom> {
+    let mut atoms = vec![];
+    for line in out.trim().lines() {
+        if !atoms.is_empty() {
+            atoms.push(ArgAtom::Delim);
+        }
+        atoms.extend(line.chars().map(ArgAtom::Char));
+    }
+
+    atoms
 }

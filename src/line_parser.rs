@@ -1,4 +1,4 @@
-use crate::cmdline::{Arg, ArgAtom};
+use crate::cmdline::{ArgAtom, Args};
 use anyhow::Result;
 use anyhow::{bail, ensure};
 use itertools::Itertools;
@@ -42,11 +42,10 @@ impl<'a> ArgsParser<'a> {
         Self { cursor }
     }
 
-    pub fn parse_args(&mut self) -> Result<Vec<Arg>> {
-        let mut args = vec![];
+    pub fn parse_args(&mut self) -> Result<Args> {
+        let mut atoms = Vec::new();
         loop {
             self.cursor.skip_whitespace();
-
             match self.cursor.peek() {
                 // All of the input is read.
                 None => break,
@@ -58,14 +57,16 @@ impl<'a> ArgsParser<'a> {
                 _ => {}
             }
 
-            let arg = self.parse_arg()?;
-            args.push(arg);
+            if !atoms.is_empty() {
+                atoms.push(ArgAtom::Delim);
+            }
+            atoms.extend(self.parse_arg()?);
         }
 
-        Ok(args)
+        Ok(Args::from_atoms(atoms))
     }
 
-    fn parse_arg(&mut self) -> Result<Arg> {
+    fn parse_arg(&mut self) -> Result<Vec<ArgAtom>> {
         ArgParser::new(&mut self.cursor).parse_arg()
     }
 }
@@ -87,20 +88,20 @@ impl<'a> ArgParser<'a> {
         }
     }
 
-    fn parse_arg(mut self) -> Result<Arg> {
+    fn parse_arg(mut self) -> Result<Vec<ArgAtom>> {
         loop {
             let ch = match self.cursor.peek() {
                 None => {
                     ensure!(!self.in_single, "single quote is not closed");
                     ensure!(!self.in_double, "double quote is not closed");
-                    return Ok(Arg::new(self.atoms));
+                    return Ok(self.atoms);
                 }
                 Some(')') if !self.in_single => {
                     ensure!(!self.in_double, "double quote is not closed");
-                    return Ok(Arg::new(self.atoms));
+                    return Ok(self.atoms);
                 }
                 Some(ch) if ch.is_whitespace() && (!self.in_single && !self.in_double) => {
-                    return Ok(Arg::new(self.atoms));
+                    return Ok(self.atoms);
                 }
                 Some(ch) => ch,
             };
