@@ -166,7 +166,7 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
         "cd" => Ok(CommandKind::Builtin(BuiltinCommand::Cd)),
         cmd => which(cmd)
             .map(CommandKind::External)
-            .map_err(|err| anyhow!("{}", err)),
+            .map_err(|err| anyhow!("{}: {}", cmd, err)),
     }
 }
 
