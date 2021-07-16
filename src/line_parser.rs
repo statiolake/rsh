@@ -1,4 +1,4 @@
-use crate::cmdline::{ArgAtom, Args, ArgsComposition, StdoutDestination};
+use crate::cmdline::{ArgAtom, Args, ArgsComposition, StderrDestination, StdoutDestination};
 use anyhow::Result;
 use anyhow::{bail, ensure};
 use itertools::Itertools;
@@ -17,7 +17,16 @@ impl Cursor {
     }
 
     pub fn peek(&self) -> Option<char> {
-        self.reversed.last().copied()
+        self.lookahead(0)
+    }
+
+    pub fn lookahead(&self, n: usize) -> Option<char> {
+        self.reversed
+            .len()
+            .checked_sub(n)
+            .and_then(|idx| idx.checked_sub(1))
+            .and_then(|idx| self.reversed.get(idx))
+            .copied()
     }
 
     pub fn next(&mut self) -> Option<char> {
@@ -32,6 +41,10 @@ impl Cursor {
 
     pub fn is_finished(&self) -> bool {
         self.reversed.is_empty()
+    }
+
+    pub fn left(&self) -> String {
+        self.reversed.iter().rev().copied().collect()
     }
 }
 
@@ -50,8 +63,11 @@ impl<'a> ArgsCompositionParser<'a> {
 
     pub fn parse(mut self) -> Result<ArgsComposition> {
         let mut composition = vec![];
+        self.cursor.skip_whitespace();
         while !self.cursor.is_finished() {
             let args = ArgsParser::new(self.cursor).parse()?;
+            self.cursor.skip_whitespace();
+            let (od, ed) = self.parse_redirect()?;
             self.cursor.skip_whitespace();
             match self.cursor.peek() {
                 // Pipe.
@@ -62,31 +78,20 @@ impl<'a> ArgsCompositionParser<'a> {
                     if args.is_empty() {
                         bail!("pipe source is empty command");
                     }
-                    composition.push((args, StdoutDestination::PipeToNext));
-                }
-                // Redirect
-                Some('>') => {
-                    // Consume this redirect.
-                    self.cursor.next();
-                    self.cursor.skip_whitespace();
-                    if args.is_empty() {
-                        bail!("redirect source is empty command");
-                    }
-                    let path = self.parse_path()?;
-                    composition.push((args, StdoutDestination::File(path)));
+                    composition.push((args, StdoutDestination::PipeToNext, ed));
                 }
                 // End of the command line
                 Some(';') | None => {
                     // Consume this endmarker.
                     self.cursor.next();
                     self.cursor.skip_whitespace();
-                    composition.push((args, StdoutDestination::Inherit));
+                    composition.push((args, od, ed));
                     break;
                 }
                 // End of nested command.
                 Some(')') => {
                     // DO NOT consume this; the parent parse_arg_atom_cmd() expects ')' to be there.
-                    composition.push((args, StdoutDestination::Inherit));
+                    composition.push((args, od, ed));
                     break;
                 }
 
@@ -95,6 +100,53 @@ impl<'a> ArgsCompositionParser<'a> {
         }
 
         Ok(ArgsComposition { composition })
+    }
+
+    fn parse_redirect(&mut self) -> Result<(StdoutDestination, StderrDestination)> {
+        let mut od = StdoutDestination::Inherit;
+        let mut ed = StderrDestination::Inherit;
+
+        loop {
+            self.cursor.skip_whitespace();
+            match (self.cursor.lookahead(0), self.cursor.lookahead(1)) {
+                // Stdout redirect
+                (Some('>'), _) | (Some('1'), Some('>')) => {
+                    // Consume this redirect.
+                    if self.cursor.next() == Some('1') {
+                        self.cursor.next();
+                    }
+
+                    self.cursor.skip_whitespace();
+                    let path = self.parse_path()?;
+                    od = StdoutDestination::File(path);
+                }
+
+                // Stderr redirect
+                (Some('2'), Some('>')) => {
+                    // Consume this redirect.
+                    self.cursor.next();
+                    self.cursor.next();
+
+                    self.cursor.skip_whitespace();
+                    if self.cursor.peek() == Some('&') {
+                        // Consume this specifier.
+                        self.cursor.next();
+                        match self.cursor.next() {
+                            Some('1') => ed = StderrDestination::Stdout,
+                            Some(ch) => bail!("unknown stream number: &{}", ch),
+                            None => bail!("stream number expected after &"),
+                        }
+                    } else {
+                        let path = self.parse_path()?;
+                        ed = StderrDestination::File(path);
+                    }
+                }
+
+                _ => break,
+            }
+        }
+
+        Ok((od, ed))
     }
 
     fn parse_path(&mut self) -> Result<PathBuf> {
@@ -134,6 +186,10 @@ impl<'a> ArgsParser<'a> {
 
                 // Pipe.
                 Some('|') => break,
+
+                // Redirect.
+                Some('>') => break,
+                Some('1') | Some('2') if self.cursor.lookahead(1) == Some('>') => break,
 
                 // Otherwise continue parsing in this level.
                 _ => {}

@@ -3,6 +3,7 @@ use crate::ctrlc_handler::register_child;
 use crate::line_parser::{ArgsCompositionParser, Cursor};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
+use os_pipe::PipeWriter;
 use rustyline::Editor;
 use shared_child::SharedChild;
 use std::env;
@@ -67,6 +68,26 @@ impl Shell {
     }
 }
 
+pub trait TryClone {
+    fn try_clone(&self) -> Result<Box<Self>>;
+}
+
+impl TryClone for File {
+    fn try_clone(&self) -> Result<Box<Self>> {
+        self.try_clone()
+            .map_err(Into::into)
+            .map(|cloned| Box::new(cloned as _))
+    }
+}
+
+impl TryClone for PipeWriter {
+    fn try_clone(&self) -> Result<Box<Self>> {
+        self.try_clone()
+            .map_err(Into::into)
+            .map(|cloned| Box::new(cloned as _))
+    }
+}
+
 impl ShellState {
     pub fn new() -> Result<ShellState> {
         Ok(Self {
@@ -77,19 +98,21 @@ impl ShellState {
     pub fn run_compsition_inherit(&mut self, composition: ArgsComposition) -> Result<()> {
         let stdin = os_pipe::dup_stdin()?;
         let stdout = os_pipe::dup_stdout()?;
-        self.run_composition_pipe(stdin, stdout, composition)
+        let stderr = os_pipe::dup_stderr()?;
+        self.run_composition_pipe(stdin, stdout, stderr, composition)
     }
 
     pub fn run_composition_capture(&mut self, composition: ArgsComposition) -> Result<String> {
         let stdin = os_pipe::dup_stdin()?;
         let (mut reader, stdout) = os_pipe::pipe()?;
+        let stderr = os_pipe::dup_stderr()?;
         let th = thread::spawn(move || -> Result<String> {
             let mut out = String::new();
             reader.read_to_string(&mut out)?;
             Ok(out)
         });
 
-        self.run_composition_pipe(stdin, stdout, composition)?;
+        self.run_composition_pipe(stdin, stdout, stderr, composition)?;
         let out = th
             .join()
             .map_err(|_| anyhow!("failed to join the thread reading child stdout"))??;
@@ -97,21 +120,24 @@ impl ShellState {
         Ok(out)
     }
 
-    pub fn run_composition_pipe<R, W>(
+    pub fn run_composition_pipe<R, WO, WE>(
         &mut self,
         stdin: R,
-        stdout: W,
+        stdout: WO,
+        stderr: WE,
         composition: ArgsComposition,
     ) -> Result<()>
     where
         R: Read + Into<Stdio> + Send + Sync + 'static,
-        W: Write + Into<Stdio> + Send + Sync + 'static,
+        WO: Write + TryClone + Into<Stdio> + Send + Sync + 'static,
+        WE: Write + TryClone + Into<Stdio> + Send + Sync + 'static,
     {
         trait ReadIntoStdio: Read + Send + Sync + 'static {
             fn box_into_stdio(self: Box<Self>) -> Stdio;
         }
 
         trait WriteIntoStdio: Write + Send + Sync + 'static {
+            fn try_clone(&self) -> Result<Box<dyn WriteIntoStdio>>;
             fn box_into_stdio(self: Box<Self>) -> Stdio;
         }
 
@@ -121,7 +147,11 @@ impl ShellState {
             }
         }
 
-        impl<T: Write + Into<Stdio> + Send + Sync + 'static> WriteIntoStdio for T {
+        impl<T: Write + TryClone + Into<Stdio> + Send + Sync + 'static> WriteIntoStdio for T {
+            fn try_clone(&self) -> Result<Box<dyn WriteIntoStdio>> {
+                (*self).try_clone().map(|cloned| cloned as _)
+            }
+
             fn box_into_stdio(self: Box<Self>) -> Stdio {
                 (*self).into()
             }
@@ -142,38 +172,34 @@ impl ShellState {
         let mut handles = vec![];
 
         let mut stdin = Some(Box::new(stdin) as Box<dyn ReadIntoStdio>);
-        let mut stdout = Some(Box::new(stdout) as Box<dyn WriteIntoStdio>);
-
-        for (args, dest) in composition.composition {
-            let mut cloned = self.clone();
+        for (args, dest_stdout, dest_stderr) in composition.composition {
             let curr_stdin = stdin.take().expect("stdin is already taken");
-            match dest {
-                StdoutDestination::Inherit => {
-                    let curr_stdout = stdout.take().expect("stdout is already taken");
-                    let handle = thread::spawn(move || -> Result<Option<ShellState>> {
-                        cloned.run_args_pipe(curr_stdin, curr_stdout, args)?;
-                        Ok(Some(cloned))
-                    });
-                    handles.push(handle);
-                }
-                StdoutDestination::File(path) => {
-                    let curr_stdout = File::create(path)?;
-                    let handle = thread::spawn(move || -> Result<Option<ShellState>> {
-                        cloned.run_args_pipe(curr_stdin, curr_stdout, args)?;
-                        Ok(Some(cloned))
-                    });
-                    handles.push(handle);
-                }
+            let (is_inherit, next_stdin, curr_stdout): (
+                bool,
+                Option<Box<dyn ReadIntoStdio>>,
+                Box<dyn WriteIntoStdio>,
+            ) = match dest_stdout {
+                StdoutDestination::Inherit => (true, None, stdout.try_clone()? as _),
                 StdoutDestination::PipeToNext => {
                     let (next_stdin, stdout) = os_pipe::pipe()?;
-                    let handle = thread::spawn(move || -> Result<Option<ShellState>> {
-                        cloned.run_args_pipe(curr_stdin, stdout, args)?;
-                        Ok(None)
-                    });
-                    handles.push(handle);
-                    stdin = Some(Box::new(next_stdin));
+                    (false, Some(Box::new(next_stdin)), Box::new(stdout) as _)
                 }
+                StdoutDestination::File(path) => (false, None, Box::new(File::create(path)?) as _),
             };
+            let curr_stderr: Box<dyn WriteIntoStdio> = match dest_stderr {
+                StderrDestination::Inherit => stderr.try_clone()? as _,
+                StderrDestination::Stdout => curr_stdout.try_clone()? as _,
+                StderrDestination::File(path) => Box::new(File::create(path)?) as _,
+            };
+
+            let mut cloned = self.clone();
+            let handle = thread::spawn(move || -> Result<Option<ShellState>> {
+                cloned.run_args_pipe(curr_stdin, curr_stdout, curr_stderr, args)?;
+                Ok(Some(cloned).filter(|_| is_inherit))
+            });
+            handles.push(handle);
+
+            stdin = next_stdin.map(|i| i as _);
         }
 
         let mut replaced = false;
@@ -195,10 +221,17 @@ impl ShellState {
         Ok(())
     }
 
-    pub fn run_args_pipe<R, W>(&mut self, stdin: R, stdout: W, args: Args) -> Result<()>
+    pub fn run_args_pipe<R, WO, WE>(
+        &mut self,
+        stdin: R,
+        stdout: WO,
+        stderr: WE,
+        args: Args,
+    ) -> Result<()>
     where
         R: Read + Into<Stdio>,
-        W: Write + Into<Stdio>,
+        WO: Write + Into<Stdio>,
+        WE: Write + Into<Stdio>,
     {
         let mut args = args.flatten(self)?.to_vec(self);
         if args.is_empty() {
@@ -206,44 +239,48 @@ impl ShellState {
         }
 
         let cmd = resolve_cmd(&args.remove(0))?;
-        self.execute(stdin, stdout, &cmd, &args)
+        self.execute(stdin, stdout, stderr, &cmd, &args)
     }
 
     pub fn var(&self, name: &str) -> Option<String> {
         env::var(name).ok()
     }
 
-    fn execute<R, W>(
+    fn execute<R, WO, WE>(
         &mut self,
         stdin: R,
-        stdout: W,
+        stdout: WO,
+        stderr: WE,
         cmd: &CommandKind,
         args: &[String],
     ) -> Result<()>
     where
         R: Read + Into<Stdio>,
-        W: Write + Into<Stdio>,
+        WO: Write + Into<Stdio>,
+        WE: Write + Into<Stdio>,
     {
         match cmd {
-            CommandKind::Builtin(cmd) => self.execute_builtin(stdin, stdout, *cmd, args),
-            CommandKind::External(cmd) => self.execute_external(stdin, stdout, cmd, args),
+            CommandKind::Builtin(cmd) => self.execute_builtin(stdin, stdout, stderr, *cmd, args),
+            CommandKind::External(cmd) => self.execute_external(stdin, stdout, stderr, cmd, args),
         }
     }
 
-    fn execute_external<R, W>(
+    fn execute_external<R, WO, WE>(
         &mut self,
         stdin: R,
-        stdout: W,
+        stdout: WO,
+        stderr: WE,
         cmd: &Path,
         args: &[String],
     ) -> Result<()>
     where
         R: Into<Stdio>,
-        W: Into<Stdio>,
+        WO: Into<Stdio>,
+        WE: Into<Stdio>,
     {
         let args = args.iter().map(|arg| arg.to_string());
         let mut cmd = Command::new(cmd);
-        cmd.args(args).stdin(stdin).stdout(stdout);
+        cmd.args(args).stdin(stdin).stdout(stdout).stderr(stderr);
         let child = Arc::new(SharedChild::spawn(&mut cmd)?);
 
         // register Ctrl+C handler to kill the child.
@@ -273,7 +310,11 @@ fn print_error<D: Display>(err: D) {
 fn parse_cmdline(cmdline: &str) -> Result<ArgsComposition> {
     let mut cursor = Cursor::new(cmdline);
     let composition = ArgsCompositionParser::new(&mut cursor).parse()?;
-    ensure!(cursor.is_finished(), "input was not entirely read");
+    assert!(
+        cursor.is_finished(),
+        "input was not entirely read: left `{}`",
+        cursor.left()
+    );
     Ok(composition)
 }
 
@@ -290,39 +331,60 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
 
 // builtin functions
 impl ShellState {
-    pub fn execute_builtin<R, W>(
+    pub fn execute_builtin<R, WO, WE>(
         &mut self,
         stdin: R,
-        stdout: W,
+        stdout: WO,
+        stderr: WE,
         cmd: BuiltinCommand,
         args: &[String],
     ) -> Result<()>
     where
         R: Read,
-        W: Write,
+        WO: Write,
+        WE: Write,
     {
         match cmd {
-            BuiltinCommand::Exit => self.builtin_exit(stdin, stdout, args),
-            BuiltinCommand::Cd => self.builtin_cd(stdin, stdout, args),
-            BuiltinCommand::Which => self.builtin_which(stdin, stdout, args),
+            BuiltinCommand::Exit => self.builtin_exit(stdin, stdout, stderr, args),
+            BuiltinCommand::Cd => self.builtin_cd(stdin, stdout, stderr, args),
+            BuiltinCommand::Which => self.builtin_which(stdin, stdout, stderr, args),
         }
     }
 
-    pub fn builtin_exit<R, W>(&mut self, _stdin: R, _stdout: W, args: &[String]) -> Result<()> {
+    pub fn builtin_exit<R, WO, WE>(
+        &mut self,
+        _stdin: R,
+        _stdout: WO,
+        _stderr: WE,
+        args: &[String],
+    ) -> Result<()> {
         ensure!(args.is_empty(), "exit: does not take additional argument");
         self.loop_running = false;
         Ok(())
     }
 
-    pub fn builtin_cd<R, W>(&mut self, _stdin: R, _stdout: W, args: &[String]) -> Result<()> {
+    pub fn builtin_cd<R, WO, WE>(
+        &mut self,
+        _stdin: R,
+        _stdout: WO,
+        _stderr: WE,
+        args: &[String],
+    ) -> Result<()> {
         ensure!(args.len() == 1, "cd: requires exact one argument");
         env::set_current_dir(&args[0].to_string())?;
         Ok(())
     }
 
-    pub fn builtin_which<R, W>(&mut self, _stdin: R, mut stdout: W, args: &[String]) -> Result<()>
+    pub fn builtin_which<R, WO, WE>(
+        &mut self,
+        _stdin: R,
+        mut stdout: WO,
+        mut stderr: WE,
+        args: &[String],
+    ) -> Result<()>
     where
-        W: Write,
+        WO: Write,
+        WE: Write,
     {
         ensure!(args.len() == 1, "which: requires exact one argument");
         let name = &args[0];
@@ -332,8 +394,7 @@ impl ShellState {
                 CommandKind::External(path) => format!("{}", path.display()),
             },
             Err(_) => {
-                // TODO: give PipeReader for stderr
-                eprintln!("{}: not found", name);
+                writeln!(stderr, "{}: not found", name)?;
                 return Ok(());
             }
         };

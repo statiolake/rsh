@@ -23,9 +23,16 @@ pub enum StdoutDestination {
     File(PathBuf),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StderrDestination {
+    Inherit,
+    Stdout,
+    File(PathBuf),
+}
+
 #[derive(Debug, Clone)]
 pub struct ArgsComposition {
-    pub composition: Vec<(Args, StdoutDestination)>,
+    pub composition: Vec<(Args, StdoutDestination, StderrDestination)>,
 }
 
 #[derive(Debug, Clone)]
