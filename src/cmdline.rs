@@ -38,7 +38,7 @@ impl Args {
         for atom in &self.atoms {
             match atom {
                 ArgAtom::Cmd(args) => {
-                    let output = str_to_atoms(&shell.run_args_captured(&args)?);
+                    let output = str_to_atoms(&shell.run_args_capture(&args)?);
                     atoms.extend(output);
                 }
                 other => {

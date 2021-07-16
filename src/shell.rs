@@ -1,14 +1,18 @@
 use crate::cmdline::*;
-use crate::ctrlc_handler::register_child_handle;
+use crate::ctrlc_handler::register_child;
 use crate::line_parser::{ArgsParser, Cursor};
-use anyhow::bail;
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
+use os_pipe::{PipeReader, PipeWriter};
 use rustyline::Editor;
+use shared_child::SharedChild;
 use std::env;
 use std::fmt::Display;
+use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
+use std::thread;
 use which::which;
 
 const HISTORY_FILE: &str = ".rsh_history";
@@ -41,28 +45,45 @@ impl Shell {
     pub fn read_and_run(&mut self) -> Result<()> {
         let cmdline = self.read_line()?;
         let args = parse_cmdline(&cmdline)?;
-        self.run_args(&args)
+        self.run_args_inherit(&args)
     }
 
-    pub fn run_args(&mut self, args: &Args) -> Result<()> {
+    pub fn run_args_inherit(&mut self, args: &Args) -> Result<()> {
+        let stdin = os_pipe::dup_stdin()?;
+        let stdout = os_pipe::dup_stdout()?;
+        self.run_args_pipe(stdin, stdout, args)
+    }
+
+    pub fn run_args_capture(&mut self, args: &Args) -> Result<String> {
+        let stdin = os_pipe::dup_stdin()?;
+        let (mut reader, stdout) = os_pipe::pipe()?;
+        let th = thread::spawn(move || {
+            let mut out = String::new();
+            let _ = reader.read_to_string(&mut out);
+            out
+        });
+
+        self.run_args_pipe(stdin, stdout, &args)?;
+        let out = th
+            .join()
+            .map_err(|_| anyhow!("failed to read child stdout"))?;
+
+        Ok(out)
+    }
+
+    pub fn run_args_pipe(
+        &mut self,
+        stdin: PipeReader,
+        stdout: PipeWriter,
+        args: &Args,
+    ) -> Result<()> {
         let mut args = args.flatten(self)?.to_vec(self);
         if args.is_empty() {
             return Ok(());
         }
 
         let cmd = resolve_cmd(&args.remove(0))?;
-        self.execute(&cmd, &args, false).map(|_| ())
-    }
-
-    pub fn run_args_captured(&mut self, args: &Args) -> Result<String> {
-        let mut args = args.flatten(self)?.to_vec(self);
-        if args.is_empty() {
-            bail!("the command is empty")
-        }
-
-        let cmd = resolve_cmd(&args.remove(0))?;
-        self.execute(&cmd, &args, true)
-            .map(|out| out.expect("captured output not found"))
+        self.execute(stdin, stdout, &cmd, &args)
     }
 
     pub fn var(&self, name: &str) -> Option<String> {
@@ -85,42 +106,36 @@ impl Shell {
 
     fn execute(
         &mut self,
+        stdin: PipeReader,
+        stdout: PipeWriter,
         cmd: &CommandKind,
         args: &[String],
-        capture: bool,
-    ) -> Result<Option<String>> {
+    ) -> Result<()> {
         match cmd {
-            CommandKind::Builtin(cmd) => self.execute_builtin(*cmd, args, capture),
-            CommandKind::External(cmd) => self.execute_external(cmd, args, capture),
+            CommandKind::Builtin(cmd) => self.execute_builtin(stdin, stdout, *cmd, args),
+            CommandKind::External(cmd) => self.execute_external(stdin, stdout, cmd, args),
         }
     }
 
     fn execute_external(
         &mut self,
+        stdin: PipeReader,
+        stdout: PipeWriter,
         cmd: &Path,
         args: &[String],
-        capture: bool,
-    ) -> Result<Option<String>> {
+    ) -> Result<()> {
         let args = args.iter().map(|arg| arg.to_string());
-
-        let mut cmd = duct::cmd(cmd, args).unchecked();
-        if capture {
-            cmd = cmd.stdout_capture();
-        }
-
-        let handle = Arc::new(cmd.start()?);
+        let mut cmd = Command::new(cmd);
+        cmd.args(args).stdin(stdin).stdout(stdout);
+        let child = Arc::new(SharedChild::spawn(&mut cmd)?);
 
         // register Ctrl+C handler to kill the child.
-        register_child_handle(Arc::downgrade(&handle));
+        register_child(Arc::downgrade(&child));
 
-        let output = handle.wait()?;
+        // TODO: retrieve exit status
+        child.wait()?;
 
-        if capture {
-            let out = String::from_utf8_lossy(&output.stdout);
-            Ok(Some(out.to_string()))
-        } else {
-            Ok(None)
-        }
+        Ok(())
     }
 }
 
@@ -159,33 +174,36 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
 impl Shell {
     pub fn execute_builtin(
         &mut self,
+        stdin: PipeReader,
+        stdout: PipeWriter,
         cmd: BuiltinCommand,
         args: &[String],
-        capture: bool,
-    ) -> Result<Option<String>> {
+    ) -> Result<()> {
         match cmd {
-            BuiltinCommand::Exit => self.builtin_exit(args, capture),
-            BuiltinCommand::Cd => self.builtin_cd(args, capture),
+            BuiltinCommand::Exit => self.builtin_exit(stdin, stdout, args),
+            BuiltinCommand::Cd => self.builtin_cd(stdin, stdout, args),
         }
     }
 
-    pub fn builtin_exit(&mut self, args: &[String], capture: bool) -> Result<Option<String>> {
+    pub fn builtin_exit(
+        &mut self,
+        _stdin: PipeReader,
+        _stdout: PipeWriter,
+        args: &[String],
+    ) -> Result<()> {
         ensure!(args.is_empty(), "exit: does not take additional argument");
         self.loop_running = false;
-        Ok(empty_output(capture))
+        Ok(())
     }
 
-    pub fn builtin_cd(&mut self, args: &[String], capture: bool) -> Result<Option<String>> {
+    pub fn builtin_cd(
+        &mut self,
+        _stdin: PipeReader,
+        _stdout: PipeWriter,
+        args: &[String],
+    ) -> Result<()> {
         ensure!(args.len() == 1, "cd: requires exact one argument");
         env::set_current_dir(&args[0].to_string())?;
-        Ok(empty_output(capture))
-    }
-}
-
-fn empty_output(capture: bool) -> Option<String> {
-    if capture {
-        Some(String::new())
-    } else {
-        None
+        Ok(())
     }
 }
