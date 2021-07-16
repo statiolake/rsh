@@ -13,6 +13,7 @@ pub enum CommandKind {
 pub enum BuiltinCommand {
     Exit,
     Cd,
+    Which,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -229,6 +229,7 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
     match &*cmd.to_string() {
         "exit" => Ok(CommandKind::Builtin(BuiltinCommand::Exit)),
         "cd" => Ok(CommandKind::Builtin(BuiltinCommand::Cd)),
+        "which" => Ok(CommandKind::Builtin(BuiltinCommand::Which)),
         cmd => which(cmd)
             .map(CommandKind::External)
             .map_err(|err| anyhow!("{}: {}", cmd, err)),
@@ -247,6 +248,7 @@ impl ShellState {
         match cmd {
             BuiltinCommand::Exit => self.builtin_exit(stdin, stdout, args),
             BuiltinCommand::Cd => self.builtin_cd(stdin, stdout, args),
+            BuiltinCommand::Which => self.builtin_which(stdin, stdout, args),
         }
     }
 
@@ -269,6 +271,30 @@ impl ShellState {
     ) -> Result<()> {
         ensure!(args.len() == 1, "cd: requires exact one argument");
         env::set_current_dir(&args[0].to_string())?;
+        Ok(())
+    }
+
+    pub fn builtin_which(
+        &mut self,
+        _stdin: PipeReader,
+        mut stdout: PipeWriter,
+        args: &[String],
+    ) -> Result<()> {
+        ensure!(args.len() == 1, "which: requires exact one argument");
+        let name = &args[0];
+        let cmd = match resolve_cmd(name) {
+            Ok(cmd) => match cmd {
+                CommandKind::Builtin(_) => "(builtin command)".to_string(),
+                CommandKind::External(path) => format!("{}", path.display()),
+            },
+            Err(_) => {
+                // TODO: give PipeReader for stderr
+                eprintln!("{}: not found", name);
+                return Ok(());
+            }
+        };
+
+        writeln!(stdout, "{}", cmd)?;
         Ok(())
     }
 }
