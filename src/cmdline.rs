@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::shell::Shell;
+use crate::shell::ShellState;
 
 #[derive(Debug, Clone)]
 pub enum CommandKind {
@@ -15,6 +15,17 @@ pub enum BuiltinCommand {
     Cd,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StdoutDestination {
+    Inherit,
+    PipeToNext,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArgsComposition {
+    pub composition: Vec<(Args, StdoutDestination)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Args {
     atoms: Vec<ArgAtom>,
@@ -25,7 +36,7 @@ pub enum ArgAtom {
     Delim,
     Char(char),
     Var(String),
-    Cmd(Args),
+    Cmd(ArgsComposition),
 }
 
 impl Args {
@@ -33,12 +44,16 @@ impl Args {
         Self { atoms }
     }
 
-    pub fn flatten(&self, shell: &mut Shell) -> Result<Args> {
+    pub fn is_empty(&self) -> bool {
+        self.atoms.is_empty()
+    }
+
+    pub fn flatten(self, state: &mut ShellState) -> Result<Args> {
         let mut atoms = vec![];
-        for atom in &self.atoms {
+        for atom in self.atoms {
             match atom {
-                ArgAtom::Cmd(args) => {
-                    let output = str_to_atoms(&shell.run_args_capture(&args)?);
+                ArgAtom::Cmd(composition) => {
+                    let output = str_to_atoms(&state.run_composition_capture(composition)?);
                     atoms.extend(output);
                 }
                 other => {
@@ -50,7 +65,7 @@ impl Args {
         Ok(Self::from_atoms(atoms))
     }
 
-    pub fn to_vec(&self, shell: &Shell) -> Vec<String> {
+    pub fn to_vec(&self, state: &ShellState) -> Vec<String> {
         self.atoms
             .split(ArgAtom::is_delim)
             .map(|arg| {
@@ -58,7 +73,7 @@ impl Args {
                     .map(|atom| match atom {
                         ArgAtom::Delim => unreachable!("found delimiter after splitting"),
                         ArgAtom::Char(ch) => ch.to_string(),
-                        ArgAtom::Var(name) => shell.var(name).unwrap_or_else(String::new),
+                        ArgAtom::Var(name) => state.var(name).unwrap_or_else(String::new),
                         ArgAtom::Cmd(_) => panic!("to_vec() called on unflattened args"),
                     })
                     .collect()

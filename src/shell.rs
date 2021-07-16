@@ -1,6 +1,6 @@
 use crate::cmdline::*;
 use crate::ctrlc_handler::register_child;
-use crate::line_parser::{ArgsParser, Cursor};
+use crate::line_parser::{ArgsCompositionParser, Cursor};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use os_pipe::{PipeReader, PipeWriter};
@@ -17,25 +17,28 @@ use which::which;
 
 const HISTORY_FILE: &str = ".rsh_history";
 
+#[derive(Debug)]
 pub struct Shell {
-    loop_running: bool,
     rl: Editor<()>,
+    state: ShellState,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShellState {
+    loop_running: bool,
 }
 
 impl Shell {
-    pub fn new() -> Result<Shell> {
+    pub fn new() -> Result<Self> {
         let mut rl = Editor::new();
         let _ = rl.load_history(&history_path()?);
-
-        Ok(Shell {
-            loop_running: false,
-            rl,
-        })
+        let state = ShellState::new()?;
+        Ok(Self { rl, state })
     }
 
     pub fn mainloop(&mut self) {
-        self.loop_running = true;
-        while self.loop_running {
+        self.state.loop_running = true;
+        while self.state.loop_running {
             if let Err(e) = self.read_and_run() {
                 print_error(e);
             }
@@ -44,50 +47,8 @@ impl Shell {
 
     pub fn read_and_run(&mut self) -> Result<()> {
         let cmdline = self.read_line()?;
-        let args = parse_cmdline(&cmdline)?;
-        self.run_args_inherit(&args)
-    }
-
-    pub fn run_args_inherit(&mut self, args: &Args) -> Result<()> {
-        let stdin = os_pipe::dup_stdin()?;
-        let stdout = os_pipe::dup_stdout()?;
-        self.run_args_pipe(stdin, stdout, args)
-    }
-
-    pub fn run_args_capture(&mut self, args: &Args) -> Result<String> {
-        let stdin = os_pipe::dup_stdin()?;
-        let (mut reader, stdout) = os_pipe::pipe()?;
-        let th = thread::spawn(move || -> Result<String> {
-            let mut out = String::new();
-            reader.read_to_string(&mut out)?;
-            Ok(out)
-        });
-
-        self.run_args_pipe(stdin, stdout, &args)?;
-        let out = th
-            .join()
-            .map_err(|_| anyhow!("failed to join the thread reading child stdout"))??;
-
-        Ok(out)
-    }
-
-    pub fn run_args_pipe(
-        &mut self,
-        stdin: PipeReader,
-        stdout: PipeWriter,
-        args: &Args,
-    ) -> Result<()> {
-        let mut args = args.flatten(self)?.to_vec(self);
-        if args.is_empty() {
-            return Ok(());
-        }
-
-        let cmd = resolve_cmd(&args.remove(0))?;
-        self.execute(stdin, stdout, &cmd, &args)
-    }
-
-    pub fn var(&self, name: &str) -> Option<String> {
-        env::var(name).ok()
+        let composition = parse_cmdline(&cmdline)?;
+        self.state.run_compsition_inherit(composition)
     }
 
     fn read_line(&mut self) -> Result<String> {
@@ -102,6 +63,110 @@ impl Shell {
             .rl
             .save_history(&history_path().expect("must be checked before"));
         Ok(line)
+    }
+}
+
+impl ShellState {
+    pub fn new() -> Result<ShellState> {
+        Ok(Self {
+            loop_running: false,
+        })
+    }
+
+    pub fn run_compsition_inherit(&mut self, composition: ArgsComposition) -> Result<()> {
+        let stdin = os_pipe::dup_stdin()?;
+        let stdout = os_pipe::dup_stdout()?;
+        self.run_composition_pipe(stdin, stdout, composition)
+    }
+
+    pub fn run_composition_capture(&mut self, composition: ArgsComposition) -> Result<String> {
+        let stdin = os_pipe::dup_stdin()?;
+        let (mut reader, stdout) = os_pipe::pipe()?;
+        let th = thread::spawn(move || -> Result<String> {
+            let mut out = String::new();
+            reader.read_to_string(&mut out)?;
+            Ok(out)
+        });
+
+        self.run_composition_pipe(stdin, stdout, composition)?;
+        let out = th
+            .join()
+            .map_err(|_| anyhow!("failed to join the thread reading child stdout"))??;
+
+        Ok(out)
+    }
+
+    pub fn run_composition_pipe(
+        &mut self,
+        stdin: PipeReader,
+        stdout: PipeWriter,
+        composition: ArgsComposition,
+    ) -> Result<()> {
+        let mut handles = vec![];
+
+        let mut stdin = Some(stdin);
+        let mut stdout = Some(stdout);
+
+        for (args, dest) in composition.composition {
+            let mut cloned = self.clone();
+            let curr_stdin = stdin.take().expect("stdin is already taken");
+            match dest {
+                StdoutDestination::Inherit => {
+                    let curr_stdout = stdout.take().expect("stdout is already taken");
+                    let handle = thread::spawn(move || -> Result<Option<ShellState>> {
+                        cloned.run_args_pipe(curr_stdin, curr_stdout, args)?;
+                        Ok(Some(cloned))
+                    });
+                    handles.push(handle);
+                }
+                StdoutDestination::PipeToNext => {
+                    let (next_stdin, stdout) = os_pipe::pipe()?;
+                    let handle = thread::spawn(move || -> Result<Option<ShellState>> {
+                        cloned.run_args_pipe(curr_stdin, stdout, args)?;
+                        Ok(None)
+                    });
+                    handles.push(handle);
+                    stdin = Some(next_stdin);
+                }
+            };
+        }
+
+        let mut replaced = false;
+        for handle in handles {
+            let state = handle
+                .join()
+                .map_err(|_| anyhow!("failed to join threads for running piped commands"))??;
+
+            // Update the state to match the last command's result. This must occur only once.
+            if let Some(state) = state {
+                if replaced {
+                    panic!("replacing the state more then once");
+                }
+                replaced = true;
+                let _ = std::mem::replace(self, state);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn run_args_pipe(
+        &mut self,
+        stdin: PipeReader,
+        stdout: PipeWriter,
+        args: Args,
+    ) -> Result<()> {
+        let mut args = args.flatten(self)?.to_vec(self);
+        if args.is_empty() {
+            return Ok(());
+        }
+
+        let cmd = resolve_cmd(&args.remove(0))?;
+        self.execute(stdin, stdout, &cmd, &args)
+    }
+
+    pub fn var(&self, name: &str) -> Option<String> {
+        env::var(name).ok()
     }
 
     fn execute(
@@ -153,11 +218,11 @@ fn print_error<D: Display>(err: D) {
     eprintln!("rsh: {}", err);
 }
 
-fn parse_cmdline(cmdline: &str) -> Result<Args> {
+fn parse_cmdline(cmdline: &str) -> Result<ArgsComposition> {
     let mut cursor = Cursor::new(cmdline);
-    let args = ArgsParser::new(&mut cursor).parse_args()?;
+    let composition = ArgsCompositionParser::new(&mut cursor).parse()?;
     ensure!(cursor.is_finished(), "input was not entirely read");
-    Ok(args)
+    Ok(composition)
 }
 
 fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
@@ -171,7 +236,7 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
 }
 
 // builtin functions
-impl Shell {
+impl ShellState {
     pub fn execute_builtin(
         &mut self,
         stdin: PipeReader,

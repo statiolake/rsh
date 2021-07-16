@@ -1,8 +1,9 @@
-use crate::cmdline::{ArgAtom, Args};
+use crate::cmdline::{ArgAtom, Args, ArgsComposition, StdoutDestination};
 use anyhow::Result;
 use anyhow::{bail, ensure};
 use itertools::Itertools;
 
+#[derive(Debug)]
 pub struct Cursor {
     reversed: Vec<char>,
 }
@@ -33,6 +34,59 @@ impl Cursor {
     }
 }
 
+#[derive(Debug)]
+/// Parse command line.
+///
+/// <command-line> ::= <args> ("|" <args>)*
+pub struct ArgsCompositionParser<'a> {
+    cursor: &'a mut Cursor,
+}
+
+impl<'a> ArgsCompositionParser<'a> {
+    pub fn new(cursor: &'a mut Cursor) -> Self {
+        Self { cursor }
+    }
+
+    pub fn parse(self) -> Result<ArgsComposition> {
+        let mut composition = vec![];
+        while !self.cursor.is_finished() {
+            let args = ArgsParser::new(self.cursor).parse()?;
+            self.cursor.skip_whitespace();
+            match self.cursor.peek() {
+                // Pipe.
+                Some('|') => {
+                    // Consume this pipe.
+                    self.cursor.next();
+                    self.cursor.skip_whitespace();
+                    if args.is_empty() {
+                        bail!("pipe source is empty command");
+                    }
+                    composition.push((args, StdoutDestination::PipeToNext));
+                }
+                // End of the command line
+                Some(';') | None => {
+                    // Consume this endmarker.
+                    self.cursor.next();
+                    self.cursor.skip_whitespace();
+                    composition.push((args, StdoutDestination::Inherit));
+                    break;
+                }
+                // End of nested command.
+                Some(')') => {
+                    // DO NOT consume this; the parent parse_arg_atom_cmd() expects ')' to be there.
+                    composition.push((args, StdoutDestination::Inherit));
+                    break;
+                }
+
+                Some(ch) => unreachable!("args parser stopped at non-terminal char: {}", ch),
+            }
+        }
+
+        Ok(ArgsComposition { composition })
+    }
+}
+
+#[derive(Debug)]
 pub struct ArgsParser<'a> {
     cursor: &'a mut Cursor,
 }
@@ -42,7 +96,7 @@ impl<'a> ArgsParser<'a> {
         Self { cursor }
     }
 
-    pub fn parse_args(&mut self) -> Result<Args> {
+    pub fn parse(mut self) -> Result<Args> {
         let mut atoms = Vec::new();
         loop {
             self.cursor.skip_whitespace();
@@ -53,6 +107,9 @@ impl<'a> ArgsParser<'a> {
                 // The endmarker of (possible) parent invocation.
                 Some(')') => break,
 
+                // Pipe.
+                Some('|') => break,
+
                 // Otherwise continue parsing in this level.
                 _ => {}
             }
@@ -60,17 +117,14 @@ impl<'a> ArgsParser<'a> {
             if !atoms.is_empty() {
                 atoms.push(ArgAtom::Delim);
             }
-            atoms.extend(self.parse_arg()?);
+            atoms.extend(ArgParser::new(&mut self.cursor).parse()?);
         }
 
         Ok(Args::from_atoms(atoms))
     }
-
-    fn parse_arg(&mut self) -> Result<Vec<ArgAtom>> {
-        ArgParser::new(&mut self.cursor).parse_arg()
-    }
 }
 
+#[derive(Debug)]
 pub struct ArgParser<'a> {
     cursor: &'a mut Cursor,
     in_single: bool,
@@ -88,7 +142,7 @@ impl<'a> ArgParser<'a> {
         }
     }
 
-    fn parse_arg(mut self) -> Result<Vec<ArgAtom>> {
+    fn parse(mut self) -> Result<Vec<ArgAtom>> {
         loop {
             let ch = match self.cursor.peek() {
                 None => {
@@ -149,7 +203,7 @@ impl<'a> ArgParser<'a> {
 
     fn parse_arg_atom_cmd(&mut self) -> Result<ArgAtom> {
         assert_eq!(self.cursor.next(), Some('('));
-        let args = ArgsParser::new(&mut self.cursor).parse_args()?;
+        let args = ArgsCompositionParser::new(&mut self.cursor).parse()?;
         ensure!(self.cursor.next() == Some(')'), "no matching ')' found");
         Ok(ArgAtom::Cmd(args))
     }
