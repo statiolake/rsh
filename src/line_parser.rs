@@ -2,6 +2,7 @@ use crate::cmdline::{ArgAtom, Args, ArgsComposition, StdoutDestination};
 use anyhow::Result;
 use anyhow::{bail, ensure};
 use itertools::Itertools;
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct Cursor {
@@ -47,7 +48,7 @@ impl<'a> ArgsCompositionParser<'a> {
         Self { cursor }
     }
 
-    pub fn parse(self) -> Result<ArgsComposition> {
+    pub fn parse(mut self) -> Result<ArgsComposition> {
         let mut composition = vec![];
         while !self.cursor.is_finished() {
             let args = ArgsParser::new(self.cursor).parse()?;
@@ -62,6 +63,17 @@ impl<'a> ArgsCompositionParser<'a> {
                         bail!("pipe source is empty command");
                     }
                     composition.push((args, StdoutDestination::PipeToNext));
+                }
+                // Redirect
+                Some('>') => {
+                    // Consume this redirect.
+                    self.cursor.next();
+                    self.cursor.skip_whitespace();
+                    if args.is_empty() {
+                        bail!("redirect source is empty command");
+                    }
+                    let path = self.parse_path()?;
+                    composition.push((args, StdoutDestination::File(path)));
                 }
                 // End of the command line
                 Some(';') | None => {
@@ -83,6 +95,19 @@ impl<'a> ArgsCompositionParser<'a> {
         }
 
         Ok(ArgsComposition { composition })
+    }
+
+    fn parse_path(&mut self) -> Result<PathBuf> {
+        self.cursor.skip_whitespace();
+        let path: String = ArgParser::new(self.cursor, false)
+            .parse()?
+            .into_iter()
+            .map(|atom| match atom {
+                ArgAtom::Char(ch) => ch,
+                _ => unreachable!("found non-char even though interpolation is disabled"),
+            })
+            .collect();
+        Ok(PathBuf::from(path))
     }
 }
 
@@ -117,7 +142,7 @@ impl<'a> ArgsParser<'a> {
             if !atoms.is_empty() {
                 atoms.push(ArgAtom::Delim);
             }
-            atoms.extend(ArgParser::new(&mut self.cursor).parse()?);
+            atoms.extend(ArgParser::new(&mut self.cursor, true).parse()?);
         }
 
         Ok(Args::from_atoms(atoms))
@@ -127,15 +152,17 @@ impl<'a> ArgsParser<'a> {
 #[derive(Debug)]
 pub struct ArgParser<'a> {
     cursor: &'a mut Cursor,
+    interpolate: bool,
     in_single: bool,
     in_double: bool,
     atoms: Vec<ArgAtom>,
 }
 
 impl<'a> ArgParser<'a> {
-    fn new(cursor: &'a mut Cursor) -> Self {
+    fn new(cursor: &'a mut Cursor, interpolate: bool) -> Self {
         Self {
             cursor,
+            interpolate,
             in_single: false,
             in_double: false,
             atoms: vec![],
@@ -193,7 +220,7 @@ impl<'a> ArgParser<'a> {
                     _ => bail!("unknown escape sequence: ^{}", next),
                 }
             }
-            '$' if !self.in_single => match self.cursor.peek() {
+            '$' if !self.in_single && self.interpolate => match self.cursor.peek() {
                 Some('(') => self.parse_arg_atom_cmd(),
                 _ => self.parse_arg_atom_var(),
             },
