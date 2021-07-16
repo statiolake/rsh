@@ -57,16 +57,16 @@ impl Shell {
     pub fn run_args_capture(&mut self, args: &Args) -> Result<String> {
         let stdin = os_pipe::dup_stdin()?;
         let (mut reader, stdout) = os_pipe::pipe()?;
-        let th = thread::spawn(move || {
+        let th = thread::spawn(move || -> Result<String> {
             let mut out = String::new();
-            let _ = reader.read_to_string(&mut out);
-            out
+            reader.read_to_string(&mut out)?;
+            Ok(out)
         });
 
         self.run_args_pipe(stdin, stdout, &args)?;
         let out = th
             .join()
-            .map_err(|_| anyhow!("failed to read child stdout"))?;
+            .map_err(|_| anyhow!("failed to join the thread reading child stdout"))??;
 
         Ok(out)
     }
