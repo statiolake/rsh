@@ -55,7 +55,7 @@ impl Shell {
 
     fn read_line(&mut self) -> Result<String> {
         use rustyline::error::ReadlineError;
-        let prompt = format!("{} $ ", env::current_dir()?.display());
+        let prompt = self.prompt()?;
         let line = match self.rl.readline(&prompt) {
             Err(ReadlineError::Eof) => "exit".to_string(),
             res => res?,
@@ -65,6 +65,25 @@ impl Shell {
             .rl
             .save_history(&history_path().expect("must be checked before"));
         Ok(line)
+    }
+
+    fn prompt(&self) -> Result<String> {
+        let now = chrono::Local::now();
+        let time = now.format("%H:%M:%S");
+        let username = whoami::username();
+        let computername = whoami::hostname();
+        let path = env::current_dir()?;
+        // FIXME: change face according to the previous exit status
+        let face = if true { "('-')/" } else { "(-_-)/" };
+
+        Ok(format!(
+            "{time} {username}@{computername}:{path}\n{face} > ",
+            time = time,
+            username = username,
+            computername = computername,
+            path = path.display(),
+            face = face
+        ))
     }
 }
 
