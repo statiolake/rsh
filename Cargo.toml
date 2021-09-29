@@ -1,2 +1,2 @@
 [workspace]
-members = ["rsh"]
+members = ["rsh", "rsh-line-editor"]
