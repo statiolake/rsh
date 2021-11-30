@@ -4,12 +4,12 @@ use crate::line_parser::{ArgsCompositionParser, Cursor};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use os_pipe::PipeWriter;
-use rustyline::Editor;
+use rsh_line_editor::LineEditor;
 use shared_child::SharedChild;
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::prelude::*;
+use std::io::{prelude::*, stdout};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::Stdio;
@@ -21,7 +21,7 @@ const HISTORY_FILE: &str = ".rsh_history";
 
 #[derive(Debug)]
 pub struct Shell {
-    rl: Editor<()>,
+    rle: LineEditor,
     state: ShellState,
 }
 
@@ -32,10 +32,9 @@ pub struct ShellState {
 
 impl Shell {
     pub fn new() -> Result<Self> {
-        let mut rl = Editor::new();
-        let _ = rl.load_history(&history_path()?);
+        let rle = LineEditor::new();
         let state = ShellState::new()?;
-        Ok(Self { rl, state })
+        Ok(Self { rle, state })
     }
 
     pub fn mainloop(&mut self) {
@@ -54,16 +53,15 @@ impl Shell {
     }
 
     fn read_line(&mut self) -> Result<String> {
-        use rustyline::error::ReadlineError;
-        let prompt = self.prompt()?;
-        let line = match self.rl.readline(&prompt) {
-            Err(ReadlineError::Eof) => "exit".to_string(),
-            res => res?,
+        let input = self.rle.read_line(|| {
+            print!("{}", self.prompt()?);
+            stdout().flush()?;
+            Ok(())
+        });
+        let line = match input {
+            Ok(res) => res,
+            Err(_) => unreachable!(),
         };
-        self.rl.add_history_entry(&line);
-        let _ = self
-            .rl
-            .save_history(&history_path().expect("must be checked before"));
         Ok(line)
     }
 
