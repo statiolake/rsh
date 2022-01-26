@@ -4,7 +4,7 @@ use crate::line_parser::{ArgsCompositionParser, Cursor};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use os_pipe::PipeWriter;
-use rsh_line_editor::LineEditor;
+use rsh_line_editor::{LineEditor, UserInput};
 use shared_child::SharedChild;
 use std::env;
 use std::fmt::Display;
@@ -58,10 +58,12 @@ impl Shell {
             stdout().flush()?;
             Ok(())
         });
-        let line = match input {
-            Ok(res) => res,
-            Err(_) => unreachable!(),
+
+        let line = match input? {
+            UserInput::String(line) => line,
+            UserInput::EOF => "exit".to_string(),
         };
+
         Ok(line)
     }
 
