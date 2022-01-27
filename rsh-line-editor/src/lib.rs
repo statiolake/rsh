@@ -77,6 +77,8 @@ fn read_line() -> Result<UserInput> {
                 KeyCode::Delete => buf.delete(),
                 KeyCode::Char('b') if is_ctrl => buf.move_left(1),
                 KeyCode::Char('f') if is_ctrl => buf.move_right(1),
+                KeyCode::Char('a') if is_ctrl => buf.move_begin(),
+                KeyCode::Char('e') if is_ctrl => buf.move_end(),
                 KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
                 _ => {}
             }
@@ -326,6 +328,14 @@ impl LineBuffer {
 
     pub fn move_right(&mut self, n: usize) {
         self.cursor_at = self.cursor_at.saturating_add(n).min(self.buf.len());
+    }
+
+    pub fn move_begin(&mut self) {
+        self.cursor_at = 0;
+    }
+
+    pub fn move_end(&mut self) {
+        self.cursor_at = self.num_chars();
     }
 
     pub fn backspace(&mut self) {
