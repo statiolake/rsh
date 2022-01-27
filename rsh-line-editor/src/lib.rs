@@ -6,7 +6,7 @@ use crossterm::event::Event;
 use crossterm::event::{read, KeyCode, KeyModifiers};
 use crossterm::queue;
 use crossterm::style::Print;
-use crossterm::terminal::size as term_size;
+use crossterm::terminal::{size as term_size, Clear, ClearType};
 use itertools::Itertools;
 use std::fmt;
 use std::io::{self, StdoutLock, Write};
@@ -157,6 +157,7 @@ impl<'a> LinePrinter<'a> {
         self.move_cursor_to_prompt()?;
         self.print_lines()?;
         self.move_cursor_to_input()?;
+        self.cleanup_after_cursor()?;
         queue!(self.stdout, Show)?;
         self.stdout.flush()?;
 
@@ -255,13 +256,21 @@ impl<'a> LinePrinter<'a> {
     fn print_lines(&mut self) -> Result<()> {
         queue!(self.stdout, SavePosition)?;
         for (idx, line) in self.lines.iter().enumerate() {
-            if idx > 0 {
-                queue!(self.stdout, Print('\n'))?;
-            }
-            queue!(self.stdout, Print(line))?;
+            let col = if idx == 0 { self.prompt_pos.col } else { 0 };
+            let row = self.prompt_pos.row + idx as u16;
+            queue!(self.stdout, MoveTo(col, row), Print(line))?;
         }
         queue!(self.stdout, RestorePosition)?;
 
+        Ok(())
+    }
+
+    fn cleanup_after_cursor(&mut self) -> Result<()> {
+        queue!(
+            self.stdout,
+            Clear(ClearType::FromCursorDown),
+            Clear(ClearType::UntilNewLine),
+        )?;
         Ok(())
     }
 
