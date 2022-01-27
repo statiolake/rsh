@@ -99,6 +99,8 @@ impl LineEditor {
             KeyCode::Char('d') if is_alt => buf.delete_word(),
             KeyCode::Char('l') if is_ctrl => printer.clear()?,
             KeyCode::Char('k') if is_ctrl => buf.delete_after(),
+            // FIXME: '/' cannot be mapped...
+            KeyCode::Char('y') if is_ctrl => buf.redo_edit(),
             KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
             KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
             _ => {}
@@ -364,6 +366,7 @@ impl<'a, P> LinePrinter<'a, P> {
 #[derive(Debug, Clone)]
 pub struct LineBuffer {
     prev_buffer: Box<Option<LineBuffer>>,
+    next_buffer: Box<Option<LineBuffer>>,
     buf: Vec<char>,
     cursor_at: usize,
 }
@@ -372,6 +375,7 @@ impl LineBuffer {
     pub fn new() -> Self {
         Self {
             prev_buffer: Box::new(None),
+            next_buffer: Box::new(None),
             buf: Vec::new(),
             cursor_at: 0,
         }
@@ -444,9 +448,20 @@ impl LineBuffer {
         }
     }
 
+    pub fn redo_edit(&mut self) {
+        let next = self.next_buffer.take();
+        if let Some(mut next) = next {
+            next.prev_buffer = Box::new(Some(self.clone()));
+            *self = next;
+        }
+    }
+
     pub fn undo_edit(&mut self) {
-        let prev = self.prev_buffer.take().unwrap_or_default();
-        *self = prev;
+        let prev = self.prev_buffer.take();
+        if let Some(mut prev) = prev {
+            prev.next_buffer = Box::new(Some(self.clone()));
+            *self = prev;
+        }
     }
 
     pub fn num_chars(&self) -> usize {
@@ -494,6 +509,7 @@ impl LineBuffer {
     fn record_history(&mut self) {
         let cloned = self.clone();
         self.prev_buffer = Box::new(Some(cloned));
+        self.next_buffer = Box::new(None);
     }
 }
 
