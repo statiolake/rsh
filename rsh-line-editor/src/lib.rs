@@ -47,29 +47,27 @@ impl LineEditor {
         LineEditor {}
     }
 
-    pub fn read_line<F>(&self, prompt_writer: F) -> Result<UserInput>
-    where
-        F: FnOnce() -> Result<(), anyhow::Error>,
-    {
-        prompt_writer().map_err(Error::PromptError)?;
-        read_line()
+    pub fn read_line<P: PromptWriter>(&self, prompt_writer: P) -> Result<UserInput> {
+        read_line(prompt_writer)
     }
 }
 
 pub trait PromptWriter {
-    fn write(&mut self) -> anyhow::Result<()>;
+    fn write<W: Write>(&mut self, out: &mut W) -> anyhow::Result<()>;
 }
 
-fn read_line() -> Result<UserInput> {
+fn read_line<P: PromptWriter>(prompt_writer: P) -> Result<UserInput> {
     let mut buf = LineBuffer::new();
     let stdout = io::stdout();
-    let mut printer = LinePrinter::new(stdout.lock())?;
+    let mut printer = LinePrinter::new(stdout.lock(), prompt_writer)?;
+
+    printer.print_prompt()?;
     loop {
         if let Event::Key(key) = read()? {
             let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
             match key.code {
                 KeyCode::Enter => {
-                    printer.print_newline()?;
+                    printer.print_accepted()?;
                     return Ok(UserInput::String(buf.to_string()));
                 }
                 KeyCode::Backspace => buf.backspace(),
@@ -85,6 +83,7 @@ fn read_line() -> Result<UserInput> {
                 KeyCode::Char('f') if is_ctrl => buf.move_right(1),
                 KeyCode::Char('a') if is_ctrl => buf.move_begin(),
                 KeyCode::Char('e') if is_ctrl => buf.move_end(),
+                KeyCode::Char('l') if is_ctrl => printer.clear()?,
                 KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
                 _ => {}
             }
@@ -120,9 +119,10 @@ impl From<Coord> for (u16, u16) {
     }
 }
 
-pub struct LinePrinter<'a> {
+pub struct LinePrinter<'a, P> {
     // This lock prevents stdout to be modified outside of LineLayout.
     stdout: StdoutLock<'a>,
+    prompt_writer: P,
     prompt_pos: Coord,
     lines: Vec<String>,
     cursor_pos: Coord,
@@ -130,11 +130,12 @@ pub struct LinePrinter<'a> {
     term_size: Coord,
 }
 
-impl<'a> LinePrinter<'a> {
-    pub fn new(stdout: StdoutLock<'a>) -> Result<Self> {
+impl<'a, P> LinePrinter<'a, P> {
+    pub fn new(stdout: StdoutLock<'a>, prompt_writer: P) -> Result<Self> {
         let cursor = cursor_position()?.into();
         Ok(Self {
             stdout,
+            prompt_writer,
             prompt_pos: cursor,
             lines: vec![],
             cursor_pos: cursor,
@@ -157,7 +158,39 @@ impl<'a> LinePrinter<'a> {
         Ok(())
     }
 
-    pub fn print_newline(&mut self) -> Result<()> {
+    pub fn print_prompt(&mut self) -> Result<()>
+    where
+        P: PromptWriter,
+    {
+        self.prompt_writer
+            .write(&mut self.stdout)
+            .map_err(Error::PromptError)?;
+        self.stdout.flush()?;
+
+        // Update cursor positions
+        let pos = cursor_position()?.into();
+        self.prompt_pos = pos;
+        self.cursor_pos = pos;
+
+        Ok(())
+    }
+
+    pub fn clear(&mut self) -> Result<()>
+    where
+        P: PromptWriter,
+    {
+        // Scroll entire screen
+        self.scroll_up(self.term_size.row)?;
+
+        // Move to top-left and write normally
+        queue!(self.stdout, MoveTo(0, 0))?;
+        self.print_prompt()?;
+        self.print()?;
+
+        Ok(())
+    }
+
+    pub fn print_accepted(&mut self) -> Result<()> {
         let (col, row) = self.end_cursor_pos.into();
         queue!(self.stdout, MoveTo(col, row), Print('\n'))?;
         Ok(())
