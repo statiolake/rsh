@@ -72,7 +72,8 @@ impl LineEditor {
         printer: &mut LinePrinter<P>,
         buf: &mut LineBuffer,
     ) -> Result<Option<UserInput>, Error> {
-        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let is_ctrl = key.modifiers == KeyModifiers::CONTROL;
+        let is_alt = key.modifiers == KeyModifiers::ALT;
         match key.code {
             KeyCode::Enter => {
                 printer.print_accepted()?;
@@ -92,6 +93,10 @@ impl LineEditor {
             KeyCode::Char('f') if is_ctrl => buf.move_right(1),
             KeyCode::Char('a') if is_ctrl => buf.move_begin(),
             KeyCode::Char('e') if is_ctrl => buf.move_end(),
+            KeyCode::Char('b') if is_alt => buf.move_left_word(),
+            KeyCode::Char('f') if is_alt => buf.move_right_word(),
+            KeyCode::Char('w') if is_ctrl => buf.backspace_word(),
+            KeyCode::Char('d') if is_alt => buf.delete_word(),
             KeyCode::Char('l') if is_ctrl => printer.clear()?,
             KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
             _ => {}
@@ -379,12 +384,31 @@ impl LineBuffer {
         self.cursor_at = self.cursor_at.saturating_add(n).min(self.buf.len());
     }
 
+    pub fn move_left_word(&mut self) {
+        self.cursor_at = self.word_start_before(self.cursor_at);
+    }
+
+    pub fn move_right_word(&mut self) {
+        self.cursor_at = self.word_start_after(self.cursor_at);
+    }
+
+    pub fn backspace_word(&mut self) {
+        let start = self.word_start_before(self.cursor_at);
+        self.buf.drain(start..self.cursor_at);
+        self.cursor_at = start;
+    }
+
+    pub fn delete_word(&mut self) {
+        let end = self.word_end_after(self.cursor_at);
+        self.buf.drain(self.cursor_at..end);
+    }
+
     pub fn move_begin(&mut self) {
         self.cursor_at = 0;
     }
 
     pub fn move_end(&mut self) {
-        self.cursor_at = self.num_chars();
+        self.cursor_at = self.buf.len();
     }
 
     pub fn backspace(&mut self) {
@@ -406,6 +430,40 @@ impl LineBuffer {
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
         self.buf.iter().copied()
+    }
+
+    fn word_start_before(&self, n: usize) -> usize {
+        self.buf
+            .iter()
+            .enumerate()
+            .take(n)
+            .rev()
+            .skip_while(|(_, ch)| ch.is_whitespace())
+            .find(|(_, ch)| ch.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(0)
+    }
+
+    fn word_start_after(&self, n: usize) -> usize {
+        self.buf
+            .iter()
+            .enumerate()
+            .skip(n)
+            .skip_while(|(_, ch)| !ch.is_whitespace())
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(self.buf.len())
+    }
+
+    fn word_end_after(&self, n: usize) -> usize {
+        self.buf
+            .iter()
+            .enumerate()
+            .skip(n)
+            .skip_while(|(_, ch)| ch.is_whitespace())
+            .find(|(_, ch)| ch.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(self.buf.len())
     }
 }
 
