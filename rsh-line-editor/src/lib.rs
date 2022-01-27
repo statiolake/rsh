@@ -94,6 +94,7 @@ fn handle_key<P: PromptWriter>(
             printer.print_accepted()?;
             return Ok(Some(UserInput::EOF));
         }
+        KeyCode::Tab => printer.set_hints(vec!["this is example hint text".to_string()]),
         KeyCode::Char('d') if is_ctrl => buf.delete(),
         KeyCode::Char('b') if is_ctrl => buf.move_left(1),
         KeyCode::Char('f') if is_ctrl => buf.move_right(1),
@@ -202,6 +203,7 @@ pub struct LinePrinter<'a, P> {
     cursor_pos: Coord,
     end_cursor_pos: Coord,
     term_size: Coord,
+    hint_lines: Vec<String>,
 }
 
 impl<'a, P> LinePrinter<'a, P> {
@@ -215,6 +217,7 @@ impl<'a, P> LinePrinter<'a, P> {
             cursor_pos: cursor,
             end_cursor_pos: cursor,
             term_size: term_size()?.into(),
+            hint_lines: vec![],
         })
     }
 
@@ -230,6 +233,10 @@ impl<'a, P> LinePrinter<'a, P> {
         self.end_cursor_pos = end_cursor_pos;
 
         Ok(())
+    }
+
+    pub fn set_hints(&mut self, hint_lines: Vec<String>) {
+        self.hint_lines = hint_lines;
     }
 
     pub fn print_prompt(&mut self) -> Result<()>
@@ -269,7 +276,13 @@ impl<'a, P> LinePrinter<'a, P> {
 
     pub fn print_accepted(&mut self) -> Result<()> {
         let (col, row) = self.end_cursor_pos.into();
-        queue!(self.stdout, MoveTo(col, row), Print('\n'))?;
+        queue!(
+            self.stdout,
+            MoveTo(col, row),
+            Print('\n'),
+            Clear(ClearType::UntilNewLine),
+            Clear(ClearType::FromCursorDown)
+        )?;
         self.stdout.flush()?;
 
         Ok(())
@@ -280,6 +293,7 @@ impl<'a, P> LinePrinter<'a, P> {
         self.ensure_room()?;
         self.move_cursor_to_prompt()?;
         self.print_lines()?;
+        self.print_hints()?;
         self.move_cursor_to_input()?;
         queue!(self.stdout, Show)?;
         self.stdout.flush()?;
@@ -342,13 +356,14 @@ impl<'a, P> LinePrinter<'a, P> {
     }
 
     fn ensure_room(&mut self) -> Result<()> {
-        if self.end_cursor_pos.row < self.term_size.row {
+        let row = self.end_cursor_pos.row + self.hint_lines.len() as u16;
+        if row < self.term_size.row {
             // There is no need to make room now.
             return Ok(());
         }
 
         // The amount needed to ensure the current cursor position < terminal size.
-        let amount = self.end_cursor_pos.row - self.term_size.row + 1;
+        let amount = row - self.term_size.row + 1;
         self.scroll_up(amount)?;
 
         Ok(())
@@ -399,6 +414,24 @@ impl<'a, P> LinePrinter<'a, P> {
             Clear(ClearType::FromCursorDown),
             Clear(ClearType::UntilNewLine)
         )?;
+
+        Ok(())
+    }
+
+    fn print_hints(&mut self) -> Result<()> {
+        let (_, row) = self.end_cursor_pos.into();
+        for (idx, line) in self.hint_lines.iter().enumerate() {
+            let line: String = line
+                .chars()
+                .scan(0, |w, ch| {
+                    *w += ch.width().unwrap_or(0) as u16;
+                    Some((*w, ch))
+                })
+                .take_while(|(w, _)| *w <= self.term_size.col)
+                .map(|(_, ch)| ch)
+                .collect();
+            queue!(self.stdout, MoveTo(0, row + idx as u16 + 1), Print(line))?;
+        }
 
         Ok(())
     }
