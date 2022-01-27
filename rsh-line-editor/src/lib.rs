@@ -10,7 +10,8 @@ use crossterm::terminal::size as term_size;
 use itertools::Itertools;
 use std::fmt;
 use std::io::{self, StdoutLock, Write};
-//use unicode_width::UnicodeWidthChar;
+use std::mem::take;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UserInput {
@@ -137,15 +138,10 @@ impl<'a> LinePrinter<'a> {
         let term_size = Coord::from(term_size()?);
         self.term_size = term_size;
 
-        // Update line string
-        // TODO: calculate width
-        let input = buf.to_string();
-        self.lines = vec![input];
+        let (lines, pos) = self.wrap_lines(buf)?;
 
-        // Update cursor position
-        let (pcol, prow) = self.prompt_pos.into();
-        // FIXME: calculate width
-        self.cursor_pos = (pcol + buf.cursor_at as u16, prow).into();
+        self.lines = lines;
+        self.cursor_pos = pos;
 
         Ok(())
     }
@@ -160,11 +156,56 @@ impl<'a> LinePrinter<'a> {
         self.ensure_room()?;
         self.move_cursor_to_prompt()?;
         self.print_lines()?;
-        self.move_cursor_from_prompt_to_input()?;
+        self.move_cursor_to_input()?;
         queue!(self.stdout, Show)?;
         self.stdout.flush()?;
 
         Ok(())
+    }
+
+    fn wrap_lines(&self, buf: &LineBuffer) -> Result<(Vec<String>, Coord)> {
+        // Update line string and cursor position
+        let mut lines = Vec::new();
+        let mut line = String::new();
+        let mut width = self.prompt_pos.col;
+        let mut pos = self.prompt_pos;
+
+        for (idx, ch) in buf.chars().enumerate() {
+            // FIXME: Investigate the size becomes None?
+            let ch_width = ch.width().unwrap_or(0) as u16;
+
+            // Wrap if current char width is too wide to fit in the current line.
+            let should_wrap = width + ch_width > self.term_size.col;
+
+            // If current position is before the cursor, increment cursor position as well.
+            let move_cursor = idx < buf.cursor_at;
+
+            if should_wrap {
+                lines.push(take(&mut line));
+                width = 0;
+                if move_cursor {
+                    pos.row += 1;
+                    pos.col = 0;
+                }
+            }
+
+            line.push(ch);
+            width += ch_width;
+            if move_cursor {
+                pos.col += ch_width;
+            }
+        }
+
+        // Add last line.
+        lines.push(line);
+
+        // if cursor is on the end of the line, move it to the beginning of the next line.
+        if pos.col == self.term_size.col {
+            pos.row += 1;
+            pos.col = 0;
+        }
+
+        Ok((lines, pos))
     }
 
     fn ensure_room(&mut self) -> Result<()> {
@@ -211,13 +252,6 @@ impl<'a> LinePrinter<'a> {
         Ok(())
     }
 
-    fn move_cursor_to_prompt(&mut self) -> Result<()> {
-        let (col, row) = self.prompt_pos.into();
-        queue!(self.stdout, MoveTo(col, row))?;
-
-        Ok(())
-    }
-
     fn print_lines(&mut self) -> Result<()> {
         queue!(self.stdout, SavePosition)?;
         for (idx, line) in self.lines.iter().enumerate() {
@@ -231,7 +265,14 @@ impl<'a> LinePrinter<'a> {
         Ok(())
     }
 
-    fn move_cursor_from_prompt_to_input(&mut self) -> Result<()> {
+    fn move_cursor_to_prompt(&mut self) -> Result<()> {
+        let (col, row) = self.prompt_pos.into();
+        queue!(self.stdout, MoveTo(col, row))?;
+
+        Ok(())
+    }
+
+    fn move_cursor_to_input(&mut self) -> Result<()> {
         let (col, row) = self.cursor_pos.into();
         queue!(self.stdout, MoveTo(col, row))?;
 
@@ -280,6 +321,10 @@ impl LineBuffer {
         if self.cursor_at < self.buf.len() {
             self.buf.remove(self.cursor_at);
         }
+    }
+
+    pub fn num_chars(&self) -> usize {
+        self.buf.len()
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
