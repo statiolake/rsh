@@ -328,6 +328,11 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
 struct Prompt;
 impl PromptWriter for Prompt {
     fn write<W: Write>(&mut self, out: &mut W) -> anyhow::Result<()> {
+        let debug = if cfg!(debug_assertions) {
+            "(debug) "
+        } else {
+            ""
+        };
         let now = chrono::Local::now();
         let time = now.format("%H:%M:%S");
         let username = whoami::username();
@@ -338,7 +343,8 @@ impl PromptWriter for Prompt {
 
         write!(
             out,
-            "{time} {username}@{computername}:{path}\n{face} > ",
+            "{debug}{time} {username}@{computername}:{path}\n{face} > ",
+            debug = debug,
             time = time,
             username = username,
             computername = computername,
