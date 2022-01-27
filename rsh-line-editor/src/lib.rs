@@ -72,9 +72,15 @@ fn read_line() -> Result<UserInput> {
                     printer.print_newline()?;
                     return Ok(UserInput::String(buf.to_string()));
                 }
-                KeyCode::Char('d') if is_ctrl && buf.is_empty() => return Ok(UserInput::EOF),
                 KeyCode::Backspace => buf.backspace(),
                 KeyCode::Delete => buf.delete(),
+                KeyCode::Char('d') if is_ctrl => {
+                    if buf.is_empty() {
+                        return Ok(UserInput::EOF);
+                    } else {
+                        buf.delete();
+                    }
+                }
                 KeyCode::Char('b') if is_ctrl => buf.move_left(1),
                 KeyCode::Char('f') if is_ctrl => buf.move_right(1),
                 KeyCode::Char('a') if is_ctrl => buf.move_begin(),
