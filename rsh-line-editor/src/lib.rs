@@ -77,7 +77,7 @@ fn read_line() -> Result<UserInput> {
                 KeyCode::Delete => buf.delete(),
                 KeyCode::Char('b') if is_ctrl => buf.move_left(1),
                 KeyCode::Char('f') if is_ctrl => buf.move_right(1),
-                KeyCode::Char(ch) => buf.insert(ch),
+                KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
                 _ => {}
             }
 
@@ -118,6 +118,7 @@ pub struct LinePrinter<'a> {
     prompt_pos: Coord,
     lines: Vec<String>,
     cursor_pos: Coord,
+    end_cursor_pos: Coord,
     term_size: Coord,
 }
 
@@ -129,6 +130,7 @@ impl<'a> LinePrinter<'a> {
             prompt_pos: cursor,
             lines: vec![],
             cursor_pos: cursor,
+            end_cursor_pos: cursor,
             term_size: term_size()?.into(),
         })
     }
@@ -138,10 +140,11 @@ impl<'a> LinePrinter<'a> {
         let term_size = Coord::from(term_size()?);
         self.term_size = term_size;
 
-        let (lines, pos) = self.wrap_lines(buf)?;
+        let (lines, cursor_pos, end_cursor_pos) = self.wrap_lines(buf)?;
 
         self.lines = lines;
-        self.cursor_pos = pos;
+        self.cursor_pos = cursor_pos;
+        self.end_cursor_pos = end_cursor_pos;
 
         Ok(())
     }
@@ -157,19 +160,21 @@ impl<'a> LinePrinter<'a> {
         self.move_cursor_to_prompt()?;
         self.print_lines()?;
         self.move_cursor_to_input()?;
-        self.cleanup_after_cursor()?;
         queue!(self.stdout, Show)?;
         self.stdout.flush()?;
 
         Ok(())
     }
 
-    fn wrap_lines(&self, buf: &LineBuffer) -> Result<(Vec<String>, Coord)> {
+    /// Returns (lines, cursor_pos, end_cursor_pos). end_cursor_pos is the cursor position at the
+    /// end of input.
+    fn wrap_lines(&self, buf: &LineBuffer) -> Result<(Vec<String>, Coord, Coord)> {
         // Update line string and cursor position
         let mut lines = Vec::new();
         let mut line = String::new();
         let mut width = self.prompt_pos.col;
-        let mut pos = self.prompt_pos;
+        let mut cursor_pos = self.prompt_pos;
+        let mut end_cursor_pos = self.prompt_pos;
 
         for (idx, ch) in buf.chars().enumerate() {
             // FIXME: Investigate the size becomes None?
@@ -184,16 +189,18 @@ impl<'a> LinePrinter<'a> {
             if should_wrap {
                 lines.push(take(&mut line));
                 width = 0;
+                end_cursor_pos.row += 1;
+                end_cursor_pos.col = 0;
                 if move_cursor {
-                    pos.row += 1;
-                    pos.col = 0;
+                    cursor_pos = end_cursor_pos;
                 }
             }
 
             line.push(ch);
             width += ch_width;
+            end_cursor_pos.col += ch_width;
             if move_cursor {
-                pos.col += ch_width;
+                cursor_pos = end_cursor_pos;
             }
         }
 
@@ -201,22 +208,26 @@ impl<'a> LinePrinter<'a> {
         lines.push(line);
 
         // if cursor is on the end of the line, move it to the beginning of the next line.
-        if pos.col == self.term_size.col {
-            pos.row += 1;
-            pos.col = 0;
+        if cursor_pos.col == self.term_size.col {
+            cursor_pos.row += 1;
+            cursor_pos.col = 0;
+        }
+        if end_cursor_pos.col == self.term_size.col {
+            end_cursor_pos.row += 1;
+            end_cursor_pos.col = 0;
         }
 
-        Ok((lines, pos))
+        Ok((lines, cursor_pos, end_cursor_pos))
     }
 
     fn ensure_room(&mut self) -> Result<()> {
-        if self.cursor_pos.row < self.term_size.row {
+        if self.end_cursor_pos.row < self.term_size.row {
             // There is no need to make room now.
             return Ok(());
         }
 
         // The amount needed to ensure the current cursor position < terminal size.
-        let amount = self.cursor_pos.row - self.term_size.row + 1;
+        let amount = self.end_cursor_pos.row - self.term_size.row + 1;
         self.scroll_up(amount)?;
 
         Ok(())
@@ -254,23 +265,20 @@ impl<'a> LinePrinter<'a> {
     }
 
     fn print_lines(&mut self) -> Result<()> {
-        queue!(self.stdout, SavePosition)?;
         for (idx, line) in self.lines.iter().enumerate() {
             let col = if idx == 0 { self.prompt_pos.col } else { 0 };
             let row = self.prompt_pos.row + idx as u16;
             queue!(self.stdout, MoveTo(col, row), Print(line))?;
         }
-        queue!(self.stdout, RestorePosition)?;
 
-        Ok(())
-    }
-
-    fn cleanup_after_cursor(&mut self) -> Result<()> {
+        let (col, row) = self.end_cursor_pos.into();
         queue!(
             self.stdout,
+            MoveTo(col, row),
             Clear(ClearType::FromCursorDown),
-            Clear(ClearType::UntilNewLine),
+            Clear(ClearType::UntilNewLine)
         )?;
+
         Ok(())
     }
 
