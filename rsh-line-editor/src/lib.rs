@@ -7,10 +7,10 @@ use crossterm::event::{Event, KeyEvent};
 use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{size as term_size, Clear, ClearType};
-use itertools::Itertools;
+use itertools::{cloned, Itertools};
 use std::fmt;
 use std::io::{self, StdoutLock, Write};
-use std::mem::take;
+use std::mem::{replace, take};
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,6 +99,7 @@ impl LineEditor {
             KeyCode::Char('d') if is_alt => buf.delete_word(),
             KeyCode::Char('l') if is_ctrl => printer.clear()?,
             KeyCode::Char('k') if is_ctrl => buf.delete_after(),
+            KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
             KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
             _ => {}
         }
@@ -360,7 +361,9 @@ impl<'a, P> LinePrinter<'a, P> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LineBuffer {
+    prev_buffer: Box<Option<LineBuffer>>,
     buf: Vec<char>,
     cursor_at: usize,
 }
@@ -368,6 +371,7 @@ pub struct LineBuffer {
 impl LineBuffer {
     pub fn new() -> Self {
         Self {
+            prev_buffer: Box::new(None),
             buf: Vec::new(),
             cursor_at: 0,
         }
@@ -378,6 +382,7 @@ impl LineBuffer {
     }
 
     pub fn insert(&mut self, ch: char) {
+        self.record_history();
         self.buf.insert(self.cursor_at, ch);
         self.cursor_at += 1;
     }
@@ -399,17 +404,20 @@ impl LineBuffer {
     }
 
     pub fn backspace_word(&mut self) {
+        self.record_history();
         let start = self.word_start_before(self.cursor_at);
         self.buf.drain(start..self.cursor_at);
         self.cursor_at = start;
     }
 
     pub fn delete_word(&mut self) {
+        self.record_history();
         let end = self.word_end_after(self.cursor_at);
         self.buf.drain(self.cursor_at..end);
     }
 
     pub fn delete_after(&mut self) {
+        self.record_history();
         self.buf.drain(self.cursor_at..);
     }
 
@@ -422,6 +430,7 @@ impl LineBuffer {
     }
 
     pub fn backspace(&mut self) {
+        self.record_history();
         if self.cursor_at > 0 {
             self.cursor_at -= 1;
             self.delete();
@@ -429,9 +438,15 @@ impl LineBuffer {
     }
 
     pub fn delete(&mut self) {
+        self.record_history();
         if self.cursor_at < self.buf.len() {
             self.buf.remove(self.cursor_at);
         }
+    }
+
+    pub fn undo_edit(&mut self) {
+        let prev = self.prev_buffer.take().unwrap_or_default();
+        *self = prev;
     }
 
     pub fn num_chars(&self) -> usize {
@@ -474,6 +489,11 @@ impl LineBuffer {
             .find(|(_, ch)| ch.is_whitespace())
             .map(|(idx, _)| idx)
             .unwrap_or(self.buf.len())
+    }
+
+    fn record_history(&mut self) {
+        let cloned = self.clone();
+        self.prev_buffer = Box::new(Some(cloned));
     }
 }
 
