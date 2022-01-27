@@ -7,10 +7,10 @@ use crossterm::event::{Event, KeyEvent};
 use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{size as term_size, Clear, ClearType};
-use itertools::{cloned, Itertools};
+use itertools::Itertools;
 use std::fmt;
 use std::io::{self, StdoutLock, Write};
-use std::mem::{replace, take};
+use std::mem::take;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -365,8 +365,8 @@ impl<'a, P> LinePrinter<'a, P> {
 
 #[derive(Debug, Clone)]
 pub struct LineBuffer {
-    prev_buffer: Box<Option<LineBuffer>>,
-    next_buffer: Box<Option<LineBuffer>>,
+    prev_buffer: Option<Box<LineBuffer>>,
+    next_buffer: Option<Box<LineBuffer>>,
     buf: Vec<char>,
     cursor_at: usize,
 }
@@ -374,8 +374,8 @@ pub struct LineBuffer {
 impl LineBuffer {
     pub fn new() -> Self {
         Self {
-            prev_buffer: Box::new(None),
-            next_buffer: Box::new(None),
+            prev_buffer: None,
+            next_buffer: None,
             buf: Vec::new(),
             cursor_at: 0,
         }
@@ -451,16 +451,16 @@ impl LineBuffer {
     pub fn redo_edit(&mut self) {
         let next = self.next_buffer.take();
         if let Some(mut next) = next {
-            next.prev_buffer = Box::new(Some(self.clone()));
-            *self = next;
+            next.prev_buffer = Some(Box::new(self.clone()));
+            *self = *next;
         }
     }
 
     pub fn undo_edit(&mut self) {
         let prev = self.prev_buffer.take();
         if let Some(mut prev) = prev {
-            prev.next_buffer = Box::new(Some(self.clone()));
-            *self = prev;
+            prev.next_buffer = Some(Box::new(self.clone()));
+            *self = *prev;
         }
     }
 
@@ -508,8 +508,8 @@ impl LineBuffer {
 
     fn record_history(&mut self) {
         let cloned = self.clone();
-        self.prev_buffer = Box::new(Some(cloned));
-        self.next_buffer = Box::new(None);
+        self.prev_buffer = Some(Box::new(cloned));
+        self.next_buffer = None;
     }
 }
 
