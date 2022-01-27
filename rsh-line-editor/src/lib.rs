@@ -150,7 +150,8 @@ impl<'a> LinePrinter<'a> {
     }
 
     pub fn print_newline(&mut self) -> Result<()> {
-        writeln!(self.stdout)?;
+        let (col, row) = self.end_cursor_pos.into();
+        queue!(self.stdout, MoveTo(col, row), Print('\n'))?;
         Ok(())
     }
 
