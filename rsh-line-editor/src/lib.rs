@@ -187,6 +187,7 @@ impl<'a, P> LinePrinter<'a, P> {
         let pos = cursor_position()?.into();
         self.prompt_pos = pos;
         self.cursor_pos = pos;
+        self.end_cursor_pos = pos;
 
         Ok(())
     }
@@ -196,16 +197,14 @@ impl<'a, P> LinePrinter<'a, P> {
         P: PromptWriter,
     {
         queue!(self.stdout, Hide)?;
-
         // Scroll entire screen
         self.scroll_up(self.term_size.row)?;
-
         // Move to top-left and write normally
         queue!(self.stdout, MoveTo(0, 0))?;
         self.print_prompt()?;
         self.print()?;
-
         queue!(self.stdout, Show)?;
+        self.stdout.flush()?;
 
         Ok(())
     }
@@ -213,6 +212,8 @@ impl<'a, P> LinePrinter<'a, P> {
     pub fn print_accepted(&mut self) -> Result<()> {
         let (col, row) = self.end_cursor_pos.into();
         queue!(self.stdout, MoveTo(col, row), Print('\n'))?;
+        self.stdout.flush()?;
+
         Ok(())
     }
 
