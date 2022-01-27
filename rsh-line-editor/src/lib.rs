@@ -194,6 +194,8 @@ impl<'a, P> LinePrinter<'a, P> {
     where
         P: PromptWriter,
     {
+        queue!(self.stdout, Hide)?;
+
         // Scroll entire screen
         self.scroll_up(self.term_size.row)?;
 
@@ -201,6 +203,8 @@ impl<'a, P> LinePrinter<'a, P> {
         queue!(self.stdout, MoveTo(0, 0))?;
         self.print_prompt()?;
         self.print()?;
+
+        queue!(self.stdout, Show)?;
 
         Ok(())
     }
