@@ -111,11 +111,69 @@ fn handle_key<P: PromptWriter>(
         KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
         KeyCode::Char('p') if is_ctrl => *buf = history.prev_history(take(buf)),
         KeyCode::Char('n') if is_ctrl => *buf = history.next_history(take(buf)),
+        KeyCode::Char('r') if is_ctrl => handle_reverse_search(printer, buf, history)?,
+        KeyCode::Char('s') if is_ctrl => handle_forward_search(printer, buf, history)?,
         KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
         _ => {}
     }
 
     Ok(None)
+}
+
+fn handle_reverse_search<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    history: &mut History,
+) -> Result<()> {
+    let orig_history_idx = history.current_idx();
+    let mut curr_history_idx = orig_history_idx;
+    let mut query = String::new();
+    loop {
+        if let Event::Key(key) = read()? {
+            let is_ctrl = key.modifiers == KeyModifiers::CONTROL;
+            let is_none = key.modifiers == KeyModifiers::NONE;
+            match key.code {
+                KeyCode::Enter => break,
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Char('r') if is_ctrl => {
+                    curr_history_idx = history.current_idx();
+                }
+                KeyCode::Char(ch) if is_none => {
+                    query.push(ch);
+                    curr_history_idx = orig_history_idx;
+                }
+                _ => {}
+            }
+        }
+
+        *buf = history.recall(take(buf), curr_history_idx);
+        let (found, next_buf) = history.reverse_search(take(buf), |s| {
+            s.to_lowercase().contains(&query.to_lowercase())
+        });
+        *buf = next_buf;
+
+        printer.update_buffer(buf)?;
+        printer.set_hints(vec![format!(
+            "({}r-search) {}",
+            if found { "" } else { "failing " },
+            query
+        )]);
+        printer.print()?;
+    }
+
+    printer.set_hints(Vec::new());
+
+    Ok(())
+}
+
+fn handle_forward_search<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    history: &mut History,
+) -> Result<()> {
+    todo!()
 }
 
 #[derive(Debug)]
@@ -141,6 +199,10 @@ impl<'a> History<'a> {
         self.local_history.clear();
     }
 
+    pub fn current_idx(&self) -> usize {
+        self.history_idx
+    }
+
     pub fn prev_history(&mut self, buf: LineBuffer) -> LineBuffer {
         self.recall(buf, self.history_idx.saturating_sub(1))
     }
@@ -149,7 +211,22 @@ impl<'a> History<'a> {
         self.recall(buf, (self.history_idx + 1).min(self.history.len()))
     }
 
-    fn recall(&mut self, buf: LineBuffer, idx: usize) -> LineBuffer {
+    pub fn reverse_search<F>(&mut self, buf: LineBuffer, pred: F) -> (bool, LineBuffer)
+    where
+        F: Fn(&str) -> bool,
+    {
+        let idx = (0..=self.history_idx)
+            .rev()
+            .map(|idx| (idx, self.peek(idx)))
+            .find(|(_, s)| pred(s))
+            .map(|(idx, _)| idx);
+        match idx {
+            Some(idx) => (true, self.recall(buf, idx)),
+            None => (false, buf),
+        }
+    }
+
+    pub fn recall(&mut self, buf: LineBuffer, idx: usize) -> LineBuffer {
         self.local_history.insert(self.history_idx, buf);
         if idx > self.history.len() {
             panic!(
@@ -163,6 +240,14 @@ impl<'a> History<'a> {
         self.local_history
             .remove(&idx)
             .unwrap_or_else(|| LineBuffer::from(&*self.history[idx]))
+    }
+
+    fn peek(&mut self, idx: usize) -> String {
+        self.local_history
+            .get(&idx)
+            .map(|buf| buf.to_string())
+            .or_else(|| self.history.get(idx).cloned())
+            .unwrap_or_default()
     }
 }
 
