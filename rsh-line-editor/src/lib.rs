@@ -8,6 +8,7 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{size as term_size, Clear, ClearType};
 use itertools::Itertools;
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, StdoutLock, Write};
 use std::mem::take;
@@ -40,22 +41,27 @@ impl From<crossterm::ErrorKind> for Error {
 }
 
 #[derive(Debug)]
-pub struct LineEditor {}
+pub struct LineEditor {
+    history: Vec<String>,
+}
 
 impl LineEditor {
     pub fn new() -> LineEditor {
-        LineEditor {}
+        LineEditor {
+            history: Vec::new(),
+        }
     }
 
-    pub fn read_line<P: PromptWriter>(&self, prompt_writer: P) -> Result<UserInput> {
+    pub fn read_line<P: PromptWriter>(&mut self, prompt_writer: P) -> Result<UserInput> {
         let mut buf = LineBuffer::new();
         let stdout = io::stdout();
         let mut printer = LinePrinter::new(stdout.lock(), prompt_writer)?;
+        let mut history = History::new(&mut self.history);
 
         printer.print_prompt()?;
         loop {
             if let Event::Key(key) = read()? {
-                if let Some(input) = self.handle_key(key, &mut printer, &mut buf)? {
+                if let Some(input) = handle_key(key, &mut printer, &mut buf, &mut history)? {
                     return Ok(input);
                 }
             }
@@ -65,48 +71,97 @@ impl LineEditor {
             printer.print()?;
         }
     }
+}
 
-    fn handle_key<P: PromptWriter>(
-        &self,
-        key: KeyEvent,
-        printer: &mut LinePrinter<P>,
-        buf: &mut LineBuffer,
-    ) -> Result<Option<UserInput>, Error> {
-        let is_ctrl = key.modifiers == KeyModifiers::CONTROL;
-        let is_alt = key.modifiers == KeyModifiers::ALT;
-        match key.code {
-            KeyCode::Enter => {
-                printer.print_accepted()?;
-                return Ok(Some(UserInput::String(buf.to_string())));
-            }
-            KeyCode::Backspace => buf.backspace(),
-            KeyCode::Delete => buf.delete(),
-            KeyCode::Char('d') if is_ctrl => {
-                if buf.is_empty() {
-                    printer.print_accepted()?;
-                    return Ok(Some(UserInput::EOF));
-                } else {
-                    buf.delete();
-                }
-            }
-            KeyCode::Char('b') if is_ctrl => buf.move_left(1),
-            KeyCode::Char('f') if is_ctrl => buf.move_right(1),
-            KeyCode::Char('a') if is_ctrl => buf.move_begin(),
-            KeyCode::Char('e') if is_ctrl => buf.move_end(),
-            KeyCode::Char('b') if is_alt => buf.move_left_word(),
-            KeyCode::Char('f') if is_alt => buf.move_right_word(),
-            KeyCode::Char('w') if is_ctrl => buf.backspace_word(),
-            KeyCode::Char('d') if is_alt => buf.delete_word(),
-            KeyCode::Char('l') if is_ctrl => printer.clear()?,
-            KeyCode::Char('k') if is_ctrl => buf.delete_after(),
-            // FIXME: '/' cannot be mapped...
-            KeyCode::Char('y') if is_ctrl => buf.redo_edit(),
-            KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
-            KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
-            _ => {}
+fn handle_key<P: PromptWriter>(
+    key: KeyEvent,
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    history: &mut History,
+) -> Result<Option<UserInput>, Error> {
+    let is_ctrl = key.modifiers == KeyModifiers::CONTROL;
+    let is_alt = key.modifiers == KeyModifiers::ALT;
+
+    match key.code {
+        KeyCode::Enter => {
+            history.add_accepted_entry(buf.to_string());
+            printer.print_accepted()?;
+            return Ok(Some(UserInput::String(buf.to_string())));
+        }
+        KeyCode::Backspace => buf.backspace(),
+        KeyCode::Delete => buf.delete(),
+        KeyCode::Char('d') if is_ctrl && buf.is_empty() => {
+            printer.print_accepted()?;
+            return Ok(Some(UserInput::EOF));
+        }
+        KeyCode::Char('d') if is_ctrl => buf.delete(),
+        KeyCode::Char('b') if is_ctrl => buf.move_left(1),
+        KeyCode::Char('f') if is_ctrl => buf.move_right(1),
+        KeyCode::Char('a') if is_ctrl => buf.move_begin(),
+        KeyCode::Char('e') if is_ctrl => buf.move_end(),
+        KeyCode::Char('b') if is_alt => buf.move_left_word(),
+        KeyCode::Char('f') if is_alt => buf.move_right_word(),
+        KeyCode::Char('w') if is_ctrl => buf.backspace_word(),
+        KeyCode::Char('d') if is_alt => buf.delete_word(),
+        KeyCode::Char('l') if is_ctrl => printer.clear()?,
+        KeyCode::Char('k') if is_ctrl => buf.delete_after(),
+        // FIXME: '/' cannot be mapped...
+        KeyCode::Char('y') if is_ctrl => buf.redo_edit(),
+        KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
+        KeyCode::Char('p') if is_ctrl => *buf = history.prev_history(take(buf)),
+        KeyCode::Char('n') if is_ctrl => *buf = history.next_history(take(buf)),
+        KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
+        _ => {}
+    }
+
+    Ok(None)
+}
+
+#[derive(Debug)]
+struct History<'a> {
+    history: &'a mut Vec<String>,
+    local_history: HashMap<usize, LineBuffer>,
+    history_idx: usize,
+}
+
+impl<'a> History<'a> {
+    pub fn new(history: &'a mut Vec<String>) -> Self {
+        let history_idx = history.len();
+        Self {
+            history,
+            local_history: HashMap::new(),
+            history_idx,
+        }
+    }
+
+    pub fn add_accepted_entry(&mut self, s: String) {
+        self.history.push(s);
+        self.history_idx = self.history.len();
+        self.local_history.clear();
+    }
+
+    pub fn prev_history(&mut self, buf: LineBuffer) -> LineBuffer {
+        self.recall(buf, self.history_idx.saturating_sub(1))
+    }
+
+    pub fn next_history(&mut self, buf: LineBuffer) -> LineBuffer {
+        self.recall(buf, (self.history_idx + 1).min(self.history.len()))
+    }
+
+    fn recall(&mut self, buf: LineBuffer, idx: usize) -> LineBuffer {
+        self.local_history.insert(self.history_idx, buf);
+        if idx > self.history.len() {
+            panic!(
+                "internal error: invalid history id {} (<= {})",
+                idx,
+                self.history.len()
+            );
         }
 
-        Ok(None)
+        self.history_idx = idx;
+        self.local_history
+            .remove(&idx)
+            .unwrap_or_else(|| LineBuffer::from(&*self.history[idx]))
     }
 }
 
@@ -369,6 +424,18 @@ pub struct LineBuffer {
     next_buffer: Option<Box<LineBuffer>>,
     buf: Vec<char>,
     cursor_at: usize,
+}
+
+impl From<&str> for LineBuffer {
+    fn from(s: &str) -> Self {
+        let buf = s.chars().collect_vec();
+        LineBuffer {
+            prev_buffer: None,
+            next_buffer: None,
+            cursor_at: buf.len(),
+            buf,
+        }
+    }
 }
 
 impl LineBuffer {
