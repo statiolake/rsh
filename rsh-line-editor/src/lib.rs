@@ -98,6 +98,7 @@ impl LineEditor {
             KeyCode::Char('w') if is_ctrl => buf.backspace_word(),
             KeyCode::Char('d') if is_alt => buf.delete_word(),
             KeyCode::Char('l') if is_ctrl => printer.clear()?,
+            KeyCode::Char('k') if is_ctrl => buf.delete_after(),
             KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
             _ => {}
         }
@@ -405,6 +406,10 @@ impl LineBuffer {
     pub fn delete_word(&mut self) {
         let end = self.word_end_after(self.cursor_at);
         self.buf.drain(self.cursor_at..end);
+    }
+
+    pub fn delete_after(&mut self) {
+        self.buf.drain(self.cursor_at..);
     }
 
     pub fn move_begin(&mut self) {
