@@ -2,8 +2,8 @@ use crossterm::cursor::{
     position as cursor_position, Hide, MoveTo, MoveToPreviousLine, RestorePosition, SavePosition,
     Show,
 };
-use crossterm::event::Event;
 use crossterm::event::{read, KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyEvent};
 use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{size as term_size, Clear, ClearType};
@@ -48,44 +48,16 @@ impl LineEditor {
     }
 
     pub fn read_line<P: PromptWriter>(&self, prompt_writer: P) -> Result<UserInput> {
-        read_line(prompt_writer)
-    }
-}
+        let mut buf = LineBuffer::new();
+        let stdout = io::stdout();
+        let mut printer = LinePrinter::new(stdout.lock(), prompt_writer)?;
 
-pub trait PromptWriter {
-    fn write<W: Write>(&mut self, out: &mut W) -> anyhow::Result<()>;
-}
-
-fn read_line<P: PromptWriter>(prompt_writer: P) -> Result<UserInput> {
-    let mut buf = LineBuffer::new();
-    let stdout = io::stdout();
-    let mut printer = LinePrinter::new(stdout.lock(), prompt_writer)?;
-
-    printer.print_prompt()?;
-    loop {
-        if let Event::Key(key) = read()? {
-            let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-            match key.code {
-                KeyCode::Enter => {
-                    printer.print_accepted()?;
-                    return Ok(UserInput::String(buf.to_string()));
+        printer.print_prompt()?;
+        loop {
+            if let Event::Key(key) = read()? {
+                if let Some(input) = self.handle_key(key, &mut printer, &mut buf)? {
+                    return Ok(input);
                 }
-                KeyCode::Backspace => buf.backspace(),
-                KeyCode::Delete => buf.delete(),
-                KeyCode::Char('d') if is_ctrl => {
-                    if buf.is_empty() {
-                        return Ok(UserInput::EOF);
-                    } else {
-                        buf.delete();
-                    }
-                }
-                KeyCode::Char('b') if is_ctrl => buf.move_left(1),
-                KeyCode::Char('f') if is_ctrl => buf.move_right(1),
-                KeyCode::Char('a') if is_ctrl => buf.move_begin(),
-                KeyCode::Char('e') if is_ctrl => buf.move_end(),
-                KeyCode::Char('l') if is_ctrl => printer.clear()?,
-                KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
-                _ => {}
             }
 
             // Get current cursor position. This is the base point for readline.
@@ -93,6 +65,44 @@ fn read_line<P: PromptWriter>(prompt_writer: P) -> Result<UserInput> {
             printer.print()?;
         }
     }
+
+    fn handle_key<P: PromptWriter>(
+        &self,
+        key: KeyEvent,
+        printer: &mut LinePrinter<P>,
+        buf: &mut LineBuffer,
+    ) -> Result<Option<UserInput>, Error> {
+        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Enter => {
+                printer.print_accepted()?;
+                return Ok(Some(UserInput::String(buf.to_string())));
+            }
+            KeyCode::Backspace => buf.backspace(),
+            KeyCode::Delete => buf.delete(),
+            KeyCode::Char('d') if is_ctrl => {
+                if buf.is_empty() {
+                    printer.print_accepted()?;
+                    return Ok(Some(UserInput::EOF));
+                } else {
+                    buf.delete();
+                }
+            }
+            KeyCode::Char('b') if is_ctrl => buf.move_left(1),
+            KeyCode::Char('f') if is_ctrl => buf.move_right(1),
+            KeyCode::Char('a') if is_ctrl => buf.move_begin(),
+            KeyCode::Char('e') if is_ctrl => buf.move_end(),
+            KeyCode::Char('l') if is_ctrl => printer.clear()?,
+            KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
+            _ => {}
+        }
+
+        Ok(None)
+    }
+}
+
+pub trait PromptWriter {
+    fn write<W: Write>(&mut self, out: &mut W) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
