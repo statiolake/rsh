@@ -111,8 +111,8 @@ fn handle_key<P: PromptWriter>(
         KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
         KeyCode::Char('p') if is_ctrl => *buf = history.prev_history(take(buf)),
         KeyCode::Char('n') if is_ctrl => *buf = history.next_history(take(buf)),
-        KeyCode::Char('r') if is_ctrl => handle_reverse_search(printer, buf, history)?,
-        KeyCode::Char('s') if is_ctrl => handle_forward_search(printer, buf, history)?,
+        KeyCode::Char('r') if is_ctrl => handle_history_search(printer, buf, history, true)?,
+        KeyCode::Char('s') if is_ctrl => handle_history_search(printer, buf, history, false)?,
         KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
         _ => {}
     }
@@ -120,60 +120,118 @@ fn handle_key<P: PromptWriter>(
     Ok(None)
 }
 
-fn handle_reverse_search<P>(
+struct HistorySearcher<'p, 'pp, 'b, 'h, 'hh, P> {
+    printer: &'p mut LinePrinter<'pp, P>,
+    buf: &'b mut LineBuffer,
+    history: &'h mut History<'hh>,
+    reverse: bool,
+    query: String,
+    orig_idx: usize,
+}
+
+impl<'p, 'pp, 'b, 'h, 'hh, P> HistorySearcher<'p, 'pp, 'b, 'h, 'hh, P> {
+    pub fn new(
+        printer: &'p mut LinePrinter<'pp, P>,
+        buf: &'b mut LineBuffer,
+        history: &'h mut History<'hh>,
+        reverse: bool,
+    ) -> Self {
+        let orig_idx = history.current_idx();
+        Self {
+            printer,
+            buf,
+            history,
+            reverse,
+            query: String::new(),
+            orig_idx,
+        }
+    }
+
+    pub fn restore(&mut self) {
+        *self.buf = self.history.recall(take(self.buf), self.orig_idx);
+    }
+
+    pub fn push(&mut self, ch: char) -> Result<()> {
+        self.query.push(ch);
+        self.search_update(true)?;
+        Ok(())
+    }
+
+    pub fn pop(&mut self) -> Result<()> {
+        self.query.pop();
+        self.search_update(true)?;
+        Ok(())
+    }
+
+    pub fn set_reverse(&mut self, reverse: bool) -> Result<()> {
+        if self.reverse != reverse {
+            self.reverse = reverse;
+            self.search_update(true)?;
+        } else {
+            self.search_update(false)?;
+        }
+
+        Ok(())
+    }
+
+    fn search_update(&mut self, inclusive: bool) -> Result<()> {
+        let query = self.query.to_lowercase();
+        let (found, buf) =
+            self.history
+                .search_from_current(self.reverse, inclusive, take(self.buf), |s| {
+                    s.to_lowercase().contains(&query)
+                });
+        let hint = format!(
+            "({}{}-search) {}",
+            if found { "" } else { "failing " },
+            if self.reverse { 'r' } else { 'i' },
+            self.query
+        );
+
+        *self.buf = buf;
+        self.printer.update_buffer(self.buf)?;
+        self.printer.set_hints(vec![hint]);
+
+        Ok(())
+    }
+
+    pub fn print(&mut self) -> Result<()> {
+        self.printer.print()?;
+        Ok(())
+    }
+}
+
+fn handle_history_search<P>(
     printer: &mut LinePrinter<P>,
     buf: &mut LineBuffer,
     history: &mut History,
+    reverse: bool,
 ) -> Result<()> {
-    let orig_history_idx = history.current_idx();
-    let mut curr_history_idx = orig_history_idx;
-    let mut query = String::new();
+    let mut searcher = HistorySearcher::new(printer, buf, history, reverse);
+
     loop {
+        searcher.print()?;
         if let Event::Key(key) = read()? {
             let is_ctrl = key.modifiers == KeyModifiers::CONTROL;
             let is_none = key.modifiers == KeyModifiers::NONE;
             match key.code {
                 KeyCode::Enter => break,
-                KeyCode::Backspace => {
-                    query.pop();
+                KeyCode::Esc => {
+                    searcher.restore();
+                    break;
                 }
-                KeyCode::Char('r') if is_ctrl => {
-                    curr_history_idx = history.current_idx();
-                }
-                KeyCode::Char(ch) if is_none => {
-                    query.push(ch);
-                    curr_history_idx = orig_history_idx;
-                }
+                KeyCode::Backspace => searcher.pop()?,
+                KeyCode::Char('r') if is_ctrl => searcher.set_reverse(true)?,
+                KeyCode::Char('s') if is_ctrl => searcher.set_reverse(false)?,
+                KeyCode::Char(ch) if is_none => searcher.push(ch)?,
                 _ => {}
             }
         }
-
-        *buf = history.recall(take(buf), curr_history_idx);
-        let (found, next_buf) = history.reverse_search(take(buf), |s| {
-            s.to_lowercase().contains(&query.to_lowercase())
-        });
-        *buf = next_buf;
-
-        printer.update_buffer(buf)?;
-        printer.set_hints(vec![format!(
-            "({}r-search) {}",
-            if found { "" } else { "failing " },
-            query
-        )]);
-        printer.print()?;
     }
 
     printer.set_hints(Vec::new());
 
     Ok(())
-}
-
-fn handle_forward_search<P>(
-    printer: &mut LinePrinter<P>,
-    buf: &mut LineBuffer,
-    history: &mut History,
-) -> Result<()> {
-    todo!()
 }
 
 #[derive(Debug)]
@@ -211,12 +269,25 @@ impl<'a> History<'a> {
         self.recall(buf, (self.history_idx + 1).min(self.history.len()))
     }
 
-    pub fn reverse_search<F>(&mut self, buf: LineBuffer, pred: F) -> (bool, LineBuffer)
+    pub fn search_from_current<F>(
+        &mut self,
+        reverse: bool,
+        inclusive: bool,
+        buf: LineBuffer,
+        pred: F,
+    ) -> (bool, LineBuffer)
     where
         F: Fn(&str) -> bool,
     {
-        let idx = (0..=self.history_idx)
-            .rev()
+        let history_idx = self.history_idx;
+        let iter: Box<dyn Iterator<Item = usize>> = if reverse {
+            Box::new((0..=history_idx).rev())
+        } else {
+            Box::new(history_idx..=self.history.len())
+        };
+
+        let idx = iter
+            .filter(|idx| inclusive || *idx != history_idx)
             .map(|idx| (idx, self.peek(idx)))
             .find(|(_, s)| pred(s))
             .map(|(idx, _)| idx);
