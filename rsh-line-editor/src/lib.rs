@@ -166,7 +166,7 @@ impl<'p, 'pp, 'b, 'h, 'hh, P> HistorySearcher<'p, 'pp, 'b, 'h, 'hh, P> {
     pub fn set_reverse(&mut self, reverse: bool) -> Result<()> {
         if self.reverse != reverse {
             self.reverse = reverse;
-            self.search_update(true)?;
+            self.search_update(false)?;
         } else {
             self.search_update(false)?;
         }
