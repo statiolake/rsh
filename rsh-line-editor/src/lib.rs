@@ -735,8 +735,11 @@ impl LineBuffer {
             .take(n)
             .rev()
             .skip_while(|(_, ch)| ch.is_whitespace())
-            .find(|(_, ch)| ch.is_whitespace())
-            .map(|(idx, _)| idx)
+            // Find character AFTER whitespace
+            .tuple_windows()
+            .find(|(_, (_, ch))| ch.is_whitespace())
+            // If ch is not whitespace, idx must be 0 and it's beginning of command line.
+            .map(|((idx1, _), (idx2, ch))| if !ch.is_whitespace() { idx2 } else { idx1 })
             .unwrap_or(0)
     }
 
