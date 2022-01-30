@@ -17,3 +17,4 @@ shared_child = "0.3.5"
 which = "4.1.0"
 whoami = "1.1.2"
 rsh_line_editor = { version = "*", path = "../rsh-line-editor" }
+crossterm = "0.22.1"
