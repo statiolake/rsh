@@ -79,41 +79,44 @@ fn handle_key<P: PromptWriter>(
     buf: &mut LineBuffer,
     history: &mut History,
 ) -> Result<Option<UserInput>, Error> {
-    let is_ctrl = key.modifiers == KeyModifiers::CONTROL;
-    let is_alt = key.modifiers == KeyModifiers::ALT;
+    const CONTROL: KeyModifiers = KeyModifiers::CONTROL;
+    const ALT: KeyModifiers = KeyModifiers::ALT;
+    const NONE: KeyModifiers = KeyModifiers::NONE;
 
-    match key.code {
-        KeyCode::Enter => {
+    match (key.code, key.modifiers) {
+        (KeyCode::Enter, _) => {
             history.add_accepted_entry(buf.to_string());
             printer.print_accepted()?;
             return Ok(Some(UserInput::String(buf.to_string())));
         }
-        KeyCode::Backspace => buf.backspace(),
-        KeyCode::Delete => buf.delete(),
-        KeyCode::Char('d') if is_ctrl && buf.is_empty() => {
+        (KeyCode::Char('d'), CONTROL) if buf.is_empty() => {
             printer.print_accepted()?;
             return Ok(Some(UserInput::EOF));
         }
-        KeyCode::Tab => printer.set_hints(vec!["this is example hint text".to_string()]),
-        KeyCode::Char('d') if is_ctrl => buf.delete(),
-        KeyCode::Char('b') if is_ctrl => buf.move_left(1),
-        KeyCode::Char('f') if is_ctrl => buf.move_right(1),
-        KeyCode::Char('a') if is_ctrl => buf.move_begin(),
-        KeyCode::Char('e') if is_ctrl => buf.move_end(),
-        KeyCode::Char('b') if is_alt => buf.move_left_word(),
-        KeyCode::Char('f') if is_alt => buf.move_right_word(),
-        KeyCode::Char('w') if is_ctrl => buf.backspace_word(),
-        KeyCode::Char('d') if is_alt => buf.delete_word(),
-        KeyCode::Char('l') if is_ctrl => printer.clear()?,
-        KeyCode::Char('k') if is_ctrl => buf.delete_after(),
+        // FIXME: <C-c> is not usable here; rsh does handle <C-c>.
+        (KeyCode::Char('c'), CONTROL) | (KeyCode::Esc, _) => buf.clear(),
+        (KeyCode::Backspace, _) => buf.backspace(),
+        (KeyCode::Delete, _) => buf.delete(),
+        (KeyCode::Tab, _) => printer.set_hints(vec!["this is example hint text".to_string()]),
+        (KeyCode::Char('d'), CONTROL) => buf.delete(),
+        (KeyCode::Char('b'), CONTROL) => buf.move_left(1),
+        (KeyCode::Char('f'), CONTROL) => buf.move_right(1),
+        (KeyCode::Char('a'), CONTROL) => buf.move_begin(),
+        (KeyCode::Char('e'), CONTROL) => buf.move_end(),
+        (KeyCode::Char('b'), ALT) => buf.move_left_word(),
+        (KeyCode::Char('f'), ALT) => buf.move_right_word(),
+        (KeyCode::Char('w'), CONTROL) => buf.backspace_word(),
+        (KeyCode::Char('d'), ALT) => buf.delete_word(),
+        (KeyCode::Char('l'), CONTROL) => printer.clear()?,
+        (KeyCode::Char('k'), CONTROL) => buf.delete_after(),
         // FIXME: '/' cannot be mapped...
-        KeyCode::Char('y') if is_ctrl => buf.redo_edit(),
-        KeyCode::Char('z') if is_ctrl => buf.undo_edit(),
-        KeyCode::Char('p') if is_ctrl => *buf = history.prev_history(take(buf)),
-        KeyCode::Char('n') if is_ctrl => *buf = history.next_history(take(buf)),
-        KeyCode::Char('r') if is_ctrl => handle_history_search(printer, buf, history, true)?,
-        KeyCode::Char('s') if is_ctrl => handle_history_search(printer, buf, history, false)?,
-        KeyCode::Char(ch) if !is_ctrl => buf.insert(ch),
+        (KeyCode::Char('y'), CONTROL) => buf.redo_edit(),
+        (KeyCode::Char('z'), CONTROL) => buf.undo_edit(),
+        (KeyCode::Char('p'), CONTROL) => *buf = history.prev_history(take(buf)),
+        (KeyCode::Char('n'), CONTROL) => *buf = history.next_history(take(buf)),
+        (KeyCode::Char('r'), CONTROL) => handle_history_search(printer, buf, history, true)?,
+        (KeyCode::Char('s'), CONTROL) => handle_history_search(printer, buf, history, false)?,
+        (KeyCode::Char(ch), NONE) => buf.insert(ch),
         _ => {}
     }
 
@@ -639,6 +642,12 @@ impl LineBuffer {
 
     pub fn is_empty(&self) -> bool {
         self.buf.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.record_history();
+        self.buf.clear();
+        self.cursor_at = 0;
     }
 
     pub fn insert(&mut self, ch: char) {
