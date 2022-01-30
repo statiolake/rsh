@@ -4,12 +4,12 @@ use crate::line_parser::{ArgsCompositionParser, Cursor};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use os_pipe::PipeWriter;
-use rsh_line_editor::LineEditor;
+use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use shared_child::SharedChild;
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{prelude::*, stdout};
+use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::Stdio;
@@ -53,35 +53,14 @@ impl Shell {
     }
 
     fn read_line(&mut self) -> Result<String> {
-        let input = self.rle.read_line(|| {
-            print!("{}", self.prompt()?);
-            stdout().flush()?;
-            Ok(())
-        });
-        let line = match input {
-            Ok(res) => res,
-            Err(_) => unreachable!(),
+        let input = self.rle.read_line(Prompt);
+
+        let line = match input? {
+            UserInput::String(line) => line,
+            UserInput::EOF => "exit".to_string(),
         };
+
         Ok(line)
-    }
-
-    fn prompt(&self) -> Result<String> {
-        let now = chrono::Local::now();
-        let time = now.format("%H:%M:%S");
-        let username = whoami::username();
-        let computername = whoami::hostname();
-        let path = env::current_dir()?;
-        // FIXME: change face according to the previous exit status
-        let face = if true { "('-')/" } else { "(-_-)/" };
-
-        Ok(format!(
-            "{time} {username}@{computername}:{path}\n{face} > ",
-            time = time,
-            username = username,
-            computername = computername,
-            path = path.display(),
-            face = face
-        ))
     }
 }
 
@@ -343,6 +322,38 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
         cmd => which(cmd)
             .map(CommandKind::External)
             .map_err(|err| anyhow!("{}: {}", cmd, err)),
+    }
+}
+
+struct Prompt;
+impl PromptWriter for Prompt {
+    fn write<W: Write>(&mut self, out: &mut W) -> anyhow::Result<()> {
+        let debug = if cfg!(debug_assertions) {
+            "(debug) "
+        } else {
+            ""
+        };
+        let now = chrono::Local::now();
+        let time = now.format("%H:%M:%S");
+        let username = whoami::username();
+        let computername = whoami::hostname();
+        let path = env::current_dir()?;
+        // FIXME: change face according to the previous exit status
+        let face = if true { "('-')/" } else { "(-_-)/" };
+
+        write!(
+            out,
+            "{debug}{time} {username}@{computername}:{path}\n{face} > ",
+            debug = debug,
+            time = time,
+            username = username,
+            computername = computername,
+            path = path.display(),
+            face = face
+        )?;
+        out.flush()?;
+
+        Ok(())
     }
 }
 
