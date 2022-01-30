@@ -82,6 +82,7 @@ fn handle_key<P: PromptWriter>(
     const CONTROL: KeyModifiers = KeyModifiers::CONTROL;
     const ALT: KeyModifiers = KeyModifiers::ALT;
     const NONE: KeyModifiers = KeyModifiers::NONE;
+    const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 
     match (key.code, key.modifiers) {
         (KeyCode::Enter, _) => {
@@ -116,7 +117,7 @@ fn handle_key<P: PromptWriter>(
         (KeyCode::Char('n'), CONTROL) => *buf = history.next_history(take(buf)),
         (KeyCode::Char('r'), CONTROL) => handle_history_search(printer, buf, history, true)?,
         (KeyCode::Char('s'), CONTROL) => handle_history_search(printer, buf, history, false)?,
-        (KeyCode::Char(ch), NONE) => buf.insert(ch),
+        (KeyCode::Char(ch), NONE | SHIFT) => buf.insert(ch),
         _ => {}
     }
 
