@@ -17,6 +17,13 @@ pub enum BuiltinCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StdinSource {
+    Inherit,
+    PipeFromPrevious,
+    File(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StdoutDestination {
     Inherit,
     PipeToNext,
@@ -30,9 +37,22 @@ pub enum StderrDestination {
     File(PathBuf),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IOSpec {
+    pub is: StdinSource,
+    pub od: StdoutDestination,
+    pub ed: StderrDestination,
+}
+
+impl IOSpec {
+    pub fn new(is: StdinSource, od: StdoutDestination, ed: StderrDestination) -> Self {
+        Self { is, od, ed }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArgsComposition {
-    pub composition: Vec<(Args, StdoutDestination, StderrDestination)>,
+    pub composition: Vec<(Args, IOSpec)>,
 }
 
 #[derive(Debug, Clone)]

@@ -168,13 +168,21 @@ impl ShellState {
         let mut handles = vec![];
 
         let mut stdin = Some(Box::new(stdin) as Box<dyn ReadIntoStdio>);
-        for (args, dest_stdout, dest_stderr) in composition.composition {
-            let curr_stdin = stdin.take().expect("stdin is already taken");
+        for (args, spec) in composition.composition {
+            let curr_stdin = match spec.is {
+                StdinSource::Inherit | StdinSource::PipeFromPrevious => {
+                    stdin.take().expect("stdin is already taken")
+                }
+                StdinSource::File(path) => {
+                    let _ = stdin.take(); // Ignore current stdin specification
+                    Box::new(File::open(path)?) as _
+                }
+            };
             let (is_inherit, next_stdin, curr_stdout): (
                 bool,
                 Option<Box<dyn ReadIntoStdio>>,
                 Box<dyn WriteIntoStdio>,
-            ) = match dest_stdout {
+            ) = match spec.od {
                 StdoutDestination::Inherit => (true, None, stdout.try_clone()? as _),
                 StdoutDestination::PipeToNext => {
                     let (next_stdin, stdout) = os_pipe::pipe()?;
@@ -182,7 +190,7 @@ impl ShellState {
                 }
                 StdoutDestination::File(path) => (false, None, Box::new(File::create(path)?) as _),
             };
-            let curr_stderr: Box<dyn WriteIntoStdio> = match dest_stderr {
+            let curr_stderr: Box<dyn WriteIntoStdio> = match spec.ed {
                 StderrDestination::Inherit => stderr.try_clone()? as _,
                 StderrDestination::Stdout => curr_stdout.try_clone()? as _,
                 StderrDestination::File(path) => Box::new(File::create(path)?) as _,
@@ -195,7 +203,7 @@ impl ShellState {
             });
             handles.push(handle);
 
-            stdin = next_stdin.map(|i| i as _);
+            stdin = next_stdin;
         }
 
         let mut replaced = false;

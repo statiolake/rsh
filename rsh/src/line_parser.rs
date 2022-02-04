@@ -1,4 +1,6 @@
-use crate::cmdline::{ArgAtom, Args, ArgsComposition, StderrDestination, StdoutDestination};
+use crate::cmdline::{
+    ArgAtom, Args, ArgsComposition, IOSpec, StderrDestination, StdinSource, StdoutDestination,
+};
 use anyhow::Result;
 use anyhow::{bail, ensure};
 use itertools::Itertools;
@@ -64,10 +66,19 @@ impl<'a> ArgsCompositionParser<'a> {
     pub fn parse(mut self) -> Result<ArgsComposition> {
         let mut composition = vec![];
         self.cursor.skip_whitespace();
+        let mut is_piped = false;
         while !self.cursor.is_finished() {
             let args = ArgsParser::new(self.cursor).parse()?;
             self.cursor.skip_whitespace();
-            let (od, ed) = self.parse_redirect()?;
+            let mut spec = self.parse_redirect()?;
+            if is_piped {
+                ensure!(
+                    spec.is == StdinSource::Inherit,
+                    "pipe and redirect conflicts for stdin"
+                );
+                spec.is = StdinSource::PipeFromPrevious;
+            }
+
             self.cursor.skip_whitespace();
             match self.cursor.peek() {
                 // Pipe.
@@ -75,23 +86,27 @@ impl<'a> ArgsCompositionParser<'a> {
                     // Consume this pipe.
                     self.cursor.next();
                     self.cursor.skip_whitespace();
-                    if args.is_empty() {
-                        bail!("pipe source is empty command");
-                    }
-                    composition.push((args, StdoutDestination::PipeToNext, ed));
+                    ensure!(!args.is_empty(), "pipe source is empty command");
+                    ensure!(
+                        spec.od == StdoutDestination::Inherit,
+                        "pipe and redirect conflicts for stdout"
+                    );
+                    spec.od = StdoutDestination::PipeToNext;
+                    composition.push((args, spec));
+                    is_piped = true;
                 }
                 // End of the command line
                 Some(';') | None => {
                     // Consume this endmarker.
                     self.cursor.next();
                     self.cursor.skip_whitespace();
-                    composition.push((args, od, ed));
+                    composition.push((args, spec));
                     break;
                 }
                 // End of nested command.
                 Some(')') => {
                     // DO NOT consume this; the parent parse_arg_atom_cmd() expects ')' to be there.
-                    composition.push((args, od, ed));
+                    composition.push((args, spec));
                     break;
                 }
 
@@ -102,13 +117,23 @@ impl<'a> ArgsCompositionParser<'a> {
         Ok(ArgsComposition { composition })
     }
 
-    fn parse_redirect(&mut self) -> Result<(StdoutDestination, StderrDestination)> {
+    fn parse_redirect(&mut self) -> Result<IOSpec> {
+        let mut is = StdinSource::Inherit;
         let mut od = StdoutDestination::Inherit;
         let mut ed = StderrDestination::Inherit;
 
         loop {
             self.cursor.skip_whitespace();
             match (self.cursor.lookahead(0), self.cursor.lookahead(1)) {
+                // Stdin redirect
+                (Some('<'), _) => {
+                    // Consume this redirect.
+                    self.cursor.next();
+                    self.cursor.skip_whitespace();
+                    let path = self.parse_path()?;
+                    is = StdinSource::File(path);
+                }
+
                 // Stdout redirect
                 (Some('>'), _) | (Some('1'), Some('>')) => {
                     // Consume this redirect.
@@ -146,7 +171,7 @@ impl<'a> ArgsCompositionParser<'a> {
             }
         }
 
-        Ok((od, ed))
+        Ok(IOSpec::new(is, od, ed))
     }
 
     fn parse_path(&mut self) -> Result<PathBuf> {
@@ -188,6 +213,7 @@ impl<'a> ArgsParser<'a> {
                 Some('|') => break,
 
                 // Redirect.
+                Some('<') => break,
                 Some('>') => break,
                 Some('1') | Some('2') if self.cursor.lookahead(1) == Some('>') => break,
 
