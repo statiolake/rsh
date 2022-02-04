@@ -198,7 +198,7 @@ impl<'a> ArgsParser<'a> {
         Self { cursor }
     }
 
-    pub fn parse(mut self) -> Result<Args> {
+    pub fn parse(self) -> Result<Args> {
         let mut atoms = Vec::new();
         loop {
             self.cursor.skip_whitespace();
@@ -224,7 +224,7 @@ impl<'a> ArgsParser<'a> {
             if !atoms.is_empty() {
                 atoms.push(ArgAtom::Delim);
             }
-            atoms.extend(ArgParser::new(&mut self.cursor, true).parse()?);
+            atoms.extend(ArgParser::new(self.cursor, true).parse()?);
         }
 
         Ok(Args::from_atoms(atoms))
@@ -312,7 +312,7 @@ impl<'a> ArgParser<'a> {
 
     fn parse_arg_atom_cmd(&mut self) -> Result<ArgAtom> {
         assert_eq!(self.cursor.next(), Some('('));
-        let args = ArgsCompositionParser::new(&mut self.cursor).parse()?;
+        let args = ArgsCompositionParser::new(self.cursor).parse()?;
         ensure!(self.cursor.next() == Some(')'), "no matching ')' found");
         Ok(ArgAtom::Cmd(args))
     }
