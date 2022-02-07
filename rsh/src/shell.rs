@@ -6,11 +6,12 @@ use anyhow::{anyhow, ensure};
 use os_pipe::PipeWriter;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use shared_child::SharedChild;
+use std::borrow::Cow;
 use std::env;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -345,7 +346,7 @@ impl PromptWriter for Prompt {
         let time = now.format("%H:%M:%S");
         let username = whoami::username();
         let computername = whoami::hostname();
-        let path = env::current_dir()?;
+        let path = current_dir()?;
         // FIXME: change face according to the previous exit status
         let face = if true { "('-')/" } else { "(-_-)/" };
 
@@ -354,13 +355,26 @@ impl PromptWriter for Prompt {
             "{time} {whoami}:{path}\n{face} > ",
             time = time,
             whoami = format!("{}@{}", username, computername).green(),
-            path = path.display().to_string().blue(),
+            path = path.blue(),
             face = face
         )?;
         out.flush()?;
 
         Ok(())
     }
+}
+
+fn current_dir() -> Result<String> {
+    let path = env::current_dir()?;
+    let home = match dirs::home_dir() {
+        Some(home) => home,
+        None => return Ok(path.to_string_lossy().into_owned()),
+    };
+    Ok(match path.strip_prefix(home) {
+        Ok(under_home) if under_home.as_os_str().is_empty() => "~".to_string(),
+        Ok(under_home) => format!("~{}{}", MAIN_SEPARATOR, under_home.display()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    })
 }
 
 // builtin functions
