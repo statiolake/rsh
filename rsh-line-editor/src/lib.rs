@@ -8,11 +8,15 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{size as term_size, Clear, ClearType};
 use itertools::Itertools;
+use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Display};
+use std::fs::read_dir;
 use std::io::{self, StdoutLock, Write};
 use std::mem::take;
-use unicode_width::UnicodeWidthChar;
+use std::ops::RangeBounds;
+use std::path::{Path, MAIN_SEPARATOR};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UserInput {
@@ -42,12 +46,14 @@ impl From<crossterm::ErrorKind> for Error {
 
 #[derive(Debug)]
 pub struct LineEditor {
+    escape_char: Option<char>,
     history: Vec<String>,
 }
 
 impl LineEditor {
-    pub fn new() -> LineEditor {
+    pub fn with_escape_char(escape_char: Option<char>) -> LineEditor {
         LineEditor {
+            escape_char,
             history: Vec::new(),
         }
     }
@@ -61,7 +67,9 @@ impl LineEditor {
         printer.print_prompt()?;
         loop {
             if let Event::Key(key) = read()? {
-                if let Some(input) = handle_key(key, &mut printer, &mut buf, &mut history)? {
+                if let Some(input) =
+                    handle_key(key, &mut printer, &mut buf, &mut history, self.escape_char)?
+                {
                     return Ok(input);
                 }
             }
@@ -78,6 +86,7 @@ fn handle_key<P: PromptWriter>(
     printer: &mut LinePrinter<P>,
     buf: &mut LineBuffer,
     history: &mut History,
+    escape_char: Option<char>,
 ) -> Result<Option<UserInput>, Error> {
     const CONTROL: KeyModifiers = KeyModifiers::CONTROL;
     const ALT: KeyModifiers = KeyModifiers::ALT;
@@ -98,7 +107,7 @@ fn handle_key<P: PromptWriter>(
         (KeyCode::Char('c'), CONTROL) | (KeyCode::Esc, _) => buf.clear(),
         (KeyCode::Backspace, _) => buf.backspace(),
         (KeyCode::Delete, _) => buf.delete(),
-        (KeyCode::Tab, _) => printer.set_hints(vec!["this is example hint text".to_string()]),
+        (KeyCode::Tab, _) => handle_completion(printer, buf, escape_char)?,
         (KeyCode::Char('d'), CONTROL) => buf.delete(),
         (KeyCode::Char('b'), CONTROL) => buf.move_left(1),
         (KeyCode::Char('f'), CONTROL) => buf.move_right(1),
@@ -203,6 +212,301 @@ impl<'p, 'pp, 'b, 'h, 'hh, P> HistorySearcher<'p, 'pp, 'b, 'h, 'hh, P> {
         self.printer.print()?;
         Ok(())
     }
+}
+
+struct CompletePositionContext {
+    start: Option<usize>,
+    in_single: bool,
+    in_double: bool,
+    escaped: bool,
+}
+
+impl CompletePositionContext {
+    pub fn new() -> Self {
+        Self {
+            start: Some(0),
+            in_single: false,
+            in_double: false,
+            escaped: false,
+        }
+    }
+}
+
+fn handle_completion<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    escape_char: Option<char>,
+) -> Result<()> {
+    let end = buf.cursor_at;
+    // check quotation first; is this argument quoted?
+
+    let ctx =
+        buf.chars()
+            .enumerate()
+            .take(end)
+            .fold(CompletePositionContext::new(), |ctx, (pos, ch)| {
+                match (ctx, ch) {
+                    // Erroneous ctx
+                    (
+                        CompletePositionContext {
+                            in_single: true,
+                            in_double: true,
+                            ..
+                        },
+                        _,
+                    ) => {
+                        unreachable!("internal error: both single- and double-quoted")
+                    }
+
+                    (
+                        CompletePositionContext {
+                            in_single: true,
+                            escaped: true,
+                            ..
+                        },
+                        _,
+                    ) => {
+                        unreachable!("internal error: both single-quoted and escaped")
+                    }
+
+                    // Escape: should be treated only when non-single quoted string.
+                    (ctx @ CompletePositionContext { escaped: true, .. }, _) => {
+                        CompletePositionContext {
+                            escaped: false,
+                            ..ctx
+                        }
+                    }
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            escaped: false,
+                            ..
+                        },
+                        ch,
+                    ) if Some(ch) == escape_char => CompletePositionContext {
+                        escaped: true,
+                        ..ctx
+                    },
+
+                    // Close quotation
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: true,
+                            in_double: false,
+                            ..
+                        },
+                        '\'',
+                    ) => CompletePositionContext {
+                        start: None,
+                        in_single: false,
+                        ..ctx
+                    },
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: true,
+                            ..
+                        },
+                        '"',
+                    ) => CompletePositionContext {
+                        start: None,
+                        in_double: false,
+                        ..ctx
+                    },
+
+                    // Start quotation; this position is important. Next to the quote is start of argument.
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: false,
+                            ..
+                        },
+                        '\'',
+                    ) => CompletePositionContext {
+                        start: Some(pos + 1),
+                        in_single: true,
+                        ..ctx
+                    },
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: false,
+                            ..
+                        },
+                        '"',
+                    ) => CompletePositionContext {
+                        start: Some(pos + 1),
+                        in_double: true,
+                        ..ctx
+                    },
+
+                    // Unescaped whitespace characters; argument changed. Update position.
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: false,
+                            escaped: false,
+                            ..
+                        },
+                        ' ',
+                    ) => CompletePositionContext {
+                        start: Some(pos + 1),
+                        ..ctx
+                    },
+
+                    // Any other characters
+                    (ctx, _) => ctx,
+                }
+            });
+
+    let start = match ctx.start {
+        Some(start) => start,
+        None => return Ok(()),
+    };
+
+    assert!(start <= end);
+    let entire = buf.chars().take(end).collect::<String>();
+    let mut arg = buf
+        .chars()
+        .skip(start)
+        .take(end - start)
+        .collect::<String>();
+
+    if !ctx.in_single {
+        // Replace escaped chars
+        let mut escaped = false;
+        arg = arg
+            .chars()
+            .map(|ch| match ch {
+                ch if escaped => {
+                    escaped = false;
+                    Some(ch)
+                }
+                ch if !escaped && Some(ch) == escape_char => {
+                    escaped = true;
+                    None
+                }
+                ch => Some(ch),
+            })
+            .flatten()
+            .collect();
+    }
+
+    printer.set_hints(vec![
+        format!(
+            "start: {}, end: {}, entire: {}, arg: {}",
+            start, end, entire, arg
+        ),
+        format!("in_single: {}", ctx.in_single),
+        format!("in_double: {}", ctx.in_double),
+    ]);
+
+    run_completor(printer, buf, &ctx, &entire, &arg, escape_char)
+}
+
+fn run_completor<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    ctx: &CompletePositionContext,
+    _entire: &str,
+    arg: &str,
+    escape_char: Option<char>,
+) -> Result<()> {
+    // Clear previous hint text
+    printer.set_hints(Vec::new());
+
+    // TODO: Support other completor
+    file_completor(printer, buf, ctx, arg, escape_char)
+}
+
+fn file_completor<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    ctx: &CompletePositionContext,
+    arg: &str,
+    escape_char: Option<char>,
+) -> Result<()> {
+    let start = match ctx.start {
+        Some(start) => start,
+        None => return Ok(()),
+    };
+
+    // Parse arg as a path
+    let path = Path::new(arg);
+    let (file_name, parent) = if arg.ends_with(MAIN_SEPARATOR) {
+        (Cow::from(""), path)
+    } else {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_else(|| Cow::from(""));
+        (name, path.parent().unwrap_or_else(|| Path::new(".")))
+    };
+
+    let entries = match read_dir(parent) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    let entries: Vec<_> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .map(|name| {
+                    name.to_string_lossy()
+                        .to_lowercase()
+                        .starts_with(&*file_name.to_lowercase())
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if entries.is_empty() {
+        printer.set_hints(vec!["no matching path found".to_string()]);
+    } else if entries.len() == 1 {
+        // Unique entry; complete it.
+        buf.record_history();
+
+        let entry = &entries[0];
+        let mut entry_str = entry.path().display().to_string();
+        if entry_str.contains(' ') && !ctx.in_double && !ctx.in_single {
+            if let Some(escape_char) = escape_char {
+                entry_str = entry_str.replace(' ', &format!("{} ", escape_char));
+            }
+        }
+
+        buf.replace_range(start..buf.cursor_at, entry_str.chars());
+
+        if entry.path().is_dir() {
+            // Insert path separator after name if directory
+            buf.insert(MAIN_SEPARATOR);
+        } else {
+            // Insert whitespace otherwise; close the quote if necessary.
+            if ctx.in_single || ctx.in_double {
+                let quote = if ctx.in_single { '\'' } else { '"' };
+                if buf.char_at(buf.cursor_at) == Some(quote) {
+                    // Go out of quote
+                    buf.move_right(1);
+                } else {
+                    // Close this quote
+                    buf.insert(quote);
+                }
+            }
+            // Insert whitespace
+            buf.insert(' ');
+        }
+    } else {
+        // Set list of file names
+        let entries: Vec<_> = entries
+            .into_iter()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        printer.set_hints(printer.format_hint_grid(&entries));
+        // TODO: insert common string
+    }
+
+    Ok(())
 }
 
 fn handle_history_search<P>(
@@ -459,6 +763,65 @@ impl<'a, P> LinePrinter<'a, P> {
         self.stdout.flush()?;
 
         Ok(())
+    }
+
+    pub fn format_hint_grid<S: Display>(&self, entries: &[S]) -> Vec<String> {
+        const MAX_COLS_PER_ROW: usize = 5;
+
+        // -1 is for possible "...more..." message.
+        let max_rows = (self.term_size.row - 1) as usize / 2;
+        if entries.is_empty() || max_rows == 0 {
+            return Vec::new();
+        }
+
+        let entries: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.to_string())
+            .map(|entry| (entry.width(), entry))
+            .take(max_rows * MAX_COLS_PER_ROW)
+            .scan(0, |max_width, (width, entry)| {
+                *max_width = (*max_width).max(width);
+                Some((entry, width, *max_width))
+            })
+            .collect();
+
+        // Try layouting by larger columns
+        let (cols, rows, col_width) = {
+            let mut cols = MAX_COLS_PER_ROW;
+            loop {
+                // Extract max possible entries
+                let rows = ((entries.len() + cols - 1) / cols).min(max_rows);
+                let col_width = self.term_size.col as usize / cols;
+
+                // If cols is already 1, we can't go down anymore.
+                if cols == 1 {
+                    break (cols, rows, col_width);
+                }
+
+                // Check current col_width is enough for entries
+                let last_idx = (cols * rows).min(entries.len()) - 1;
+                let (_, _, max_width) = entries[last_idx];
+                if max_width <= col_width {
+                    break (cols, rows, col_width);
+                }
+
+                // Otherwise, try with smaller number of columns.
+                cols -= 1;
+            }
+        };
+
+        // Place entries based on computed rows and cols.
+        let num_entries = (rows * cols).min(entries.len());
+        let mut res = vec![String::new(); rows];
+
+        for idx in 0..num_entries {
+            let (entry, width, _) = &entries[idx];
+            let num_padding = col_width.saturating_sub(*width);
+            let padding = " ".repeat(num_padding);
+            res[idx % rows].push_str(&format!("{}{}", entry, padding));
+        }
+
+        res
     }
 
     /// Returns (lines, cursor_pos, end_cursor_pos). end_cursor_pos is the cursor position at the
@@ -738,6 +1101,43 @@ impl LineBuffer {
         self.buf.iter().copied()
     }
 
+    pub fn char_at(&self, idx: usize) -> Option<char> {
+        self.buf.get(idx).copied()
+    }
+
+    pub fn replace_range<R, I>(&mut self, range: R, new_chars: I)
+    where
+        R: RangeBounds<usize>,
+        I: IntoIterator<Item = char>,
+    {
+        use std::ops::Bound::*;
+        let range_start = match range.start_bound() {
+            Included(&n) => n,
+            Excluded(&n) => n.saturating_sub(1),
+            Unbounded => 0,
+        };
+        let range_end = match range.end_bound() {
+            Included(&n) => n + 1,
+            Excluded(&n) => n,
+            Unbounded => 0,
+        };
+
+        // Fix cursor position
+        if range.contains(&self.cursor_at) {
+            self.cursor_at = range_start;
+        } else if self.cursor_at >= range_end {
+            self.cursor_at -= range_end - range_start;
+        }
+
+        // Remove string in specified range
+        self.buf.drain(range);
+
+        assert!(self.cursor_at <= self.buf.len());
+
+        // Insert each chars
+        new_chars.into_iter().for_each(|ch| self.insert(ch));
+    }
+
     fn word_start_before(&self, n: usize) -> usize {
         self.buf
             .iter()
@@ -796,6 +1196,6 @@ impl fmt::Display for LineBuffer {
 
 impl Default for LineEditor {
     fn default() -> Self {
-        Self::new()
+        Self::with_escape_char(None)
     }
 }

@@ -1,6 +1,6 @@
 use crate::cmdline::*;
 use crate::ctrlc_handler::register_child;
-use crate::line_parser::{ArgsCompositionParser, Cursor};
+use crate::line_parser::{ArgsCompositionParser, Cursor, ESCAPE_CHAR};
 use anyhow::Result;
 use anyhow::{anyhow, ensure};
 use os_pipe::PipeWriter;
@@ -32,7 +32,7 @@ pub struct ShellState {
 
 impl Shell {
     pub fn new() -> Result<Self> {
-        let rle = LineEditor::new();
+        let rle = LineEditor::with_escape_char(Some(ESCAPE_CHAR));
         let state = ShellState::new()?;
         Ok(Self { rle, state })
     }
