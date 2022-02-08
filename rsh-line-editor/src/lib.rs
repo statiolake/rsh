@@ -1071,14 +1071,14 @@ impl LineBuffer {
     pub fn backspace_word(&mut self) {
         self.record_history();
         let start = self.word_start_before(self.cursor_at);
-        self.buf.drain(start..self.cursor_at);
+        self.clipboard = self.buf.drain(start..self.cursor_at).collect();
         self.cursor_at = start;
     }
 
     pub fn delete_word(&mut self) {
         self.record_history();
         let end = self.word_end_after(self.cursor_at);
-        self.buf.drain(self.cursor_at..end);
+        self.clipboard = self.buf.drain(self.cursor_at..end).collect();
     }
 
     pub fn delete_after(&mut self) {
