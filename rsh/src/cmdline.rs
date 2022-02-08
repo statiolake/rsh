@@ -14,6 +14,7 @@ pub enum BuiltinCommand {
     Exit,
     Cd,
     Which,
+    Set,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

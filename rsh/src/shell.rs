@@ -327,6 +327,7 @@ fn resolve_cmd(cmd: &str) -> Result<CommandKind> {
         "exit" => Ok(CommandKind::Builtin(BuiltinCommand::Exit)),
         "cd" => Ok(CommandKind::Builtin(BuiltinCommand::Cd)),
         "which" => Ok(CommandKind::Builtin(BuiltinCommand::Which)),
+        "set" => Ok(CommandKind::Builtin(BuiltinCommand::Set)),
         cmd => which(cmd)
             .map(CommandKind::External)
             .map_err(|err| anyhow!("{}: {}", cmd, err)),
@@ -395,6 +396,7 @@ impl ShellState {
             BuiltinCommand::Exit => self.builtin_exit(stdin, stdout, stderr, args),
             BuiltinCommand::Cd => self.builtin_cd(stdin, stdout, stderr, args),
             BuiltinCommand::Which => self.builtin_which(stdin, stdout, stderr, args),
+            BuiltinCommand::Set => self.builtin_set(stdin, stdout, stderr, args),
         }
     }
 
@@ -447,6 +449,24 @@ impl ShellState {
         };
 
         writeln!(stdout, "{}", cmd)?;
+        Ok(())
+    }
+
+    pub fn builtin_set<R, WO, WE>(
+        &mut self,
+        _stdin: R,
+        _stdout: WO,
+        _stderr: WE,
+        args: &[String],
+    ) -> Result<()>
+    where
+        WO: Write,
+        WE: Write,
+    {
+        ensure!(args.len() == 2, "set: requires exact two arguments");
+        let key = &args[0];
+        let value = &args[1];
+        env::set_var(key, value);
         Ok(())
     }
 }
