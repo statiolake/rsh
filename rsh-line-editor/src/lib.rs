@@ -42,12 +42,14 @@ impl From<crossterm::ErrorKind> for Error {
 
 #[derive(Debug)]
 pub struct LineEditor {
+    escape_char: Option<char>,
     history: Vec<String>,
 }
 
 impl LineEditor {
-    pub fn new() -> LineEditor {
+    pub fn with_escape_char(escape_char: Option<char>) -> LineEditor {
         LineEditor {
+            escape_char,
             history: Vec::new(),
         }
     }
@@ -61,7 +63,9 @@ impl LineEditor {
         printer.print_prompt()?;
         loop {
             if let Event::Key(key) = read()? {
-                if let Some(input) = handle_key(key, &mut printer, &mut buf, &mut history)? {
+                if let Some(input) =
+                    handle_key(key, &mut printer, &mut buf, &mut history, self.escape_char)?
+                {
                     return Ok(input);
                 }
             }
@@ -78,6 +82,7 @@ fn handle_key<P: PromptWriter>(
     printer: &mut LinePrinter<P>,
     buf: &mut LineBuffer,
     history: &mut History,
+    escape_char: Option<char>,
 ) -> Result<Option<UserInput>, Error> {
     const CONTROL: KeyModifiers = KeyModifiers::CONTROL;
     const ALT: KeyModifiers = KeyModifiers::ALT;
@@ -98,7 +103,7 @@ fn handle_key<P: PromptWriter>(
         (KeyCode::Char('c'), CONTROL) | (KeyCode::Esc, _) => buf.clear(),
         (KeyCode::Backspace, _) => buf.backspace(),
         (KeyCode::Delete, _) => buf.delete(),
-        (KeyCode::Tab, _) => handle_completion(printer, buf)?,
+        (KeyCode::Tab, _) => handle_completion(printer, buf, escape_char)?,
         (KeyCode::Char('d'), CONTROL) => buf.delete(),
         (KeyCode::Char('b'), CONTROL) => buf.move_left(1),
         (KeyCode::Char('f'), CONTROL) => buf.move_right(1),
@@ -205,44 +210,189 @@ impl<'p, 'pp, 'b, 'h, 'hh, P> HistorySearcher<'p, 'pp, 'b, 'h, 'hh, P> {
     }
 }
 
-fn handle_completion<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer) -> Result<()> {
+struct CompletePositionContext {
+    start: Option<usize>,
+    in_single: bool,
+    in_double: bool,
+    escaped: bool,
+}
+
+impl CompletePositionContext {
+    pub fn new() -> Self {
+        Self {
+            start: Some(0),
+            in_single: false,
+            in_double: false,
+            escaped: false,
+        }
+    }
+}
+
+fn handle_completion<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    escape_char: Option<char>,
+) -> Result<()> {
     let end = buf.cursor_at;
     // check quotation first; is this argument quoted?
 
-    // TODO: handle esacped whitepace
-    let (start, is_single_quoted, is_double_quoted) =
+    let ctx =
         buf.chars()
             .enumerate()
             .take(end)
-            .fold((Some(0), false, false), |state, (pos, ch)| {
-                match (state, ch) {
-                    ((_, true, true), _) => {
+            .fold(CompletePositionContext::new(), |ctx, (pos, ch)| {
+                match (ctx, ch) {
+                    // Erroneous ctx
+                    (
+                        CompletePositionContext {
+                            in_single: true,
+                            in_double: true,
+                            ..
+                        },
+                        _,
+                    ) => {
                         unreachable!("internal error: both single- and double-quoted")
                     }
 
-                    // Close quotation.
-                    ((_, true, false), '\'') => (None, false, false),
-                    ((_, false, true), '"') => (None, false, false),
+                    (
+                        CompletePositionContext {
+                            in_single: true,
+                            escaped: true,
+                            ..
+                        },
+                        _,
+                    ) => {
+                        unreachable!("internal error: both single-quoted and escaped")
+                    }
+
+                    // Escape: should be treated only when non-single quoted string.
+                    (ctx @ CompletePositionContext { escaped: true, .. }, _) => {
+                        CompletePositionContext {
+                            escaped: false,
+                            ..ctx
+                        }
+                    }
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            escaped: false,
+                            ..
+                        },
+                        ch,
+                    ) if Some(ch) == escape_char => CompletePositionContext {
+                        escaped: true,
+                        ..ctx
+                    },
+
+                    // Close quotation
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: true,
+                            in_double: false,
+                            ..
+                        },
+                        '\'',
+                    ) => CompletePositionContext {
+                        start: None,
+                        in_single: false,
+                        ..ctx
+                    },
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: true,
+                            ..
+                        },
+                        '"',
+                    ) => CompletePositionContext {
+                        start: None,
+                        in_double: false,
+                        ..ctx
+                    },
 
                     // Start quotation; this position is important. Next to the quote is start of argument.
-                    ((_, false, false), '\'') => (Some(pos + 1), true, false),
-                    ((_, false, false), '"') => (Some(pos + 1), false, true),
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: false,
+                            ..
+                        },
+                        '\'',
+                    ) => CompletePositionContext {
+                        start: Some(pos + 1),
+                        in_single: true,
+                        ..ctx
+                    },
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: false,
+                            ..
+                        },
+                        '"',
+                    ) => CompletePositionContext {
+                        start: Some(pos + 1),
+                        in_double: true,
+                        ..ctx
+                    },
 
-                    // Whitespace characters; argument changed. Update position.
-                    ((_, false, false), ' ') => (Some(pos + 1), false, false),
+                    // Unescaped whitespace characters; argument changed. Update position.
+                    (
+                        ctx @ CompletePositionContext {
+                            in_single: false,
+                            in_double: false,
+                            escaped: false,
+                            ..
+                        },
+                        ' ',
+                    ) => CompletePositionContext {
+                        start: Some(pos + 1),
+                        ..ctx
+                    },
 
                     // Any other characters
-                    (state, _) => state,
+                    (ctx, _) => ctx,
                 }
             });
 
+    let start = match ctx.start {
+        Some(start) => start,
+        None => return Ok(()),
+    };
+
+    assert!(start <= end);
+    let entire = buf.chars().take(end).collect::<String>();
+    let mut arg = buf
+        .chars()
+        .skip(start)
+        .take(end - start)
+        .collect::<String>();
+
     printer.set_hints(vec![
-        format!("start: {:?}, end: {}", start, end),
-        format!("is_single_quoted: {}", is_single_quoted),
-        format!("is_double_quoted: {}", is_double_quoted),
+        format!(
+            "start: {}, end: {}, entire: {}, arg: {}",
+            start, end, entire, arg
+        ),
+        format!("in_single: {}", ctx.in_single),
+        format!("in_double: {}", ctx.in_double),
     ]);
 
-    Ok(())
+    run_completor(printer, buf, &ctx, &entire, &arg)
+}
+
+fn run_completor<P>(
+    printer: &mut LinePrinter<P>,
+    buf: &mut LineBuffer,
+    ctx: &CompletePositionContext,
+    entire: &str,
+    arg: &str,
+) -> Result<()> {
+    // TODO: support other completor
+    file_completor(printer, buf, arg)
+}
+
+fn file_completor<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer, arg: &str) -> Result<()> {
+    todo!()
 }
 
 fn handle_history_search<P>(
@@ -836,6 +986,6 @@ impl fmt::Display for LineBuffer {
 
 impl Default for LineEditor {
     fn default() -> Self {
-        Self::new()
+        Self::with_escape_char(None)
     }
 }

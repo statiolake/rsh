@@ -6,6 +6,8 @@ use anyhow::{bail, ensure};
 use itertools::Itertools;
 use std::path::PathBuf;
 
+pub const ESCAPE_CHAR: char = '^';
+
 #[derive(Debug)]
 pub struct Cursor {
     reversed: Vec<char>,
@@ -289,15 +291,16 @@ impl<'a> ArgParser<'a> {
     fn parse_arg_atom(&mut self) -> Result<ArgAtom> {
         let ch = self.cursor.next().expect("there must be at least one char");
         match ch {
-            '^' if !self.in_single => {
+            ESCAPE_CHAR if !self.in_single => {
                 let next = match self.cursor.next() {
                     Some(ch) => ch,
-                    None => bail!("unexpected eol after escape `^`"),
+                    None => bail!("unexpected eol after escape `{}`", ESCAPE_CHAR),
                 };
                 match next {
                     '"' => Ok(ArgAtom::Char('"')),
                     'n' => Ok(ArgAtom::Char('\n')),
                     't' => Ok(ArgAtom::Char('\t')),
+                    ESCAPE_CHAR => Ok(ArgAtom::Char(ESCAPE_CHAR)),
                     ' ' => Ok(ArgAtom::Char(' ')),
                     _ => bail!("unknown escape sequence: ^{}", next),
                 }
