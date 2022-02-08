@@ -98,7 +98,7 @@ fn handle_key<P: PromptWriter>(
         (KeyCode::Char('c'), CONTROL) | (KeyCode::Esc, _) => buf.clear(),
         (KeyCode::Backspace, _) => buf.backspace(),
         (KeyCode::Delete, _) => buf.delete(),
-        (KeyCode::Tab, _) => printer.set_hints(vec!["this is example hint text".to_string()]),
+        (KeyCode::Tab, _) => handle_completion(printer, buf)?,
         (KeyCode::Char('d'), CONTROL) => buf.delete(),
         (KeyCode::Char('b'), CONTROL) => buf.move_left(1),
         (KeyCode::Char('f'), CONTROL) => buf.move_right(1),
@@ -203,6 +203,46 @@ impl<'p, 'pp, 'b, 'h, 'hh, P> HistorySearcher<'p, 'pp, 'b, 'h, 'hh, P> {
         self.printer.print()?;
         Ok(())
     }
+}
+
+fn handle_completion<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer) -> Result<()> {
+    let end = buf.cursor_at;
+    // check quotation first; is this argument quoted?
+
+    // TODO: handle esacped whitepace
+    let (start, is_single_quoted, is_double_quoted) =
+        buf.chars()
+            .enumerate()
+            .take(end)
+            .fold((Some(0), false, false), |state, (pos, ch)| {
+                match (state, ch) {
+                    ((_, true, true), _) => {
+                        unreachable!("internal error: both single- and double-quoted")
+                    }
+
+                    // Close quotation.
+                    ((_, true, false), '\'') => (None, false, false),
+                    ((_, false, true), '"') => (None, false, false),
+
+                    // Start quotation; this position is important. Next to the quote is start of argument.
+                    ((_, false, false), '\'') => (Some(pos + 1), true, false),
+                    ((_, false, false), '"') => (Some(pos + 1), false, true),
+
+                    // Whitespace characters; argument changed. Update position.
+                    ((_, false, false), ' ') => (Some(pos + 1), false, false),
+
+                    // Any other characters
+                    (state, _) => state,
+                }
+            });
+
+    printer.set_hints(vec![
+        format!("start: {:?}, end: {}", start, end),
+        format!("is_single_quoted: {}", is_single_quoted),
+        format!("is_double_quoted: {}", is_double_quoted),
+    ]);
+
+    Ok(())
 }
 
 fn handle_history_search<P>(
