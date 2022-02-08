@@ -503,7 +503,29 @@ fn file_completor<P>(
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         printer.set_hints(printer.format_hint_grid(&entries));
-        // TODO: insert common string
+
+        // Compute common prefix
+        fn common_prefix<'a>(a: &'a str, b: &'a str) -> &'a str {
+            let idx = (0..=a.len().min(b.len()))
+                .rev()
+                .find(|&idx| a[..idx] == b[..idx])
+                .expect("internal error: even empty string is not equal");
+            &a[..idx]
+        }
+        let mut iter = entries.iter();
+        let first = iter.next().expect("internal error: entries is empty");
+        let prefix = iter.fold(&**first, |prefix, next| common_prefix(prefix, next));
+        let mut completion = if parent != Path::new(".") {
+            parent.join(prefix).display().to_string()
+        } else {
+            prefix.to_string()
+        };
+        if completion.contains(' ') && !ctx.in_double && !ctx.in_single {
+            if let Some(escape_char) = escape_char {
+                completion = completion.replace(' ', &format!("{} ", escape_char));
+            }
+        }
+        buf.replace_range(start..buf.cursor_at, completion.chars());
     }
 
     Ok(())
