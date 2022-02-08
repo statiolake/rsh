@@ -119,8 +119,8 @@ fn handle_key<P: PromptWriter>(
         (KeyCode::Char('d'), ALT) => buf.delete_word(),
         (KeyCode::Char('l'), CONTROL) => printer.clear()?,
         (KeyCode::Char('k'), CONTROL) => buf.delete_after(),
+        (KeyCode::Char('y'), CONTROL) => buf.yank(),
         // FIXME: '/' cannot be mapped...
-        (KeyCode::Char('y'), CONTROL) => buf.redo_edit(),
         (KeyCode::Char('z'), CONTROL) => buf.undo_edit(),
         (KeyCode::Char('p'), CONTROL) => *buf = history.prev_history(take(buf)),
         (KeyCode::Char('n'), CONTROL) => *buf = history.next_history(take(buf)),
@@ -998,6 +998,7 @@ impl<'a, P> LinePrinter<'a, P> {
 pub struct LineBuffer {
     prev_buffer: Option<Box<LineBuffer>>,
     next_buffer: Option<Box<LineBuffer>>,
+    clipboard: Vec<char>,
     buf: Vec<char>,
     cursor_at: usize,
 }
@@ -1008,6 +1009,7 @@ impl From<&str> for LineBuffer {
         LineBuffer {
             prev_buffer: None,
             next_buffer: None,
+            clipboard: Vec::new(),
             cursor_at: buf.len(),
             buf,
         }
@@ -1019,6 +1021,7 @@ impl LineBuffer {
         Self {
             prev_buffer: None,
             next_buffer: None,
+            clipboard: Vec::new(),
             buf: Vec::new(),
             cursor_at: 0,
         }
@@ -1060,6 +1063,11 @@ impl LineBuffer {
         self.cursor_at = self.word_start_after(self.cursor_at);
     }
 
+    pub fn yank(&mut self) {
+        let chars = self.clipboard.clone();
+        chars.into_iter().for_each(|ch| self.insert_norecord(ch));
+    }
+
     pub fn backspace_word(&mut self) {
         self.record_history();
         let start = self.word_start_before(self.cursor_at);
@@ -1075,7 +1083,7 @@ impl LineBuffer {
 
     pub fn delete_after(&mut self) {
         self.record_history();
-        self.buf.drain(self.cursor_at..);
+        self.clipboard = self.buf.drain(self.cursor_at..).collect();
     }
 
     pub fn move_begin(&mut self) {
