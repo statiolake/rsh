@@ -6,7 +6,6 @@ use anyhow::{anyhow, ensure};
 use os_pipe::PipeWriter;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use shared_child::SharedChild;
-use std::borrow::Cow;
 use std::env;
 use std::fmt::Display;
 use std::fs::File;

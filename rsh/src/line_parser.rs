@@ -253,17 +253,17 @@ impl<'a> ArgParser<'a> {
 
     fn parse(mut self) -> Result<Vec<ArgAtom>> {
         loop {
+            let in_quote = self.in_single || self.in_double;
             let ch = match self.cursor.peek() {
                 None => {
                     ensure!(!self.in_single, "single quote is not closed");
                     ensure!(!self.in_double, "double quote is not closed");
                     return Ok(self.atoms);
                 }
-                Some(')') if !self.in_single => {
-                    ensure!(!self.in_double, "double quote is not closed");
+                Some(')') if !in_quote => {
                     return Ok(self.atoms);
                 }
-                Some(ch) if ch.is_whitespace() && (!self.in_single && !self.in_double) => {
+                Some(ch) if ch.is_whitespace() && !in_quote => {
                     return Ok(self.atoms);
                 }
                 Some(ch) => ch,
