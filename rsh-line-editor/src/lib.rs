@@ -466,8 +466,6 @@ fn file_completor<P>(
         printer.set_hints(vec!["no matching path found".to_string()]);
     } else if entries.len() == 1 {
         // Unique entry; complete it.
-        buf.record_history();
-
         let entry = &entries[0];
         let mut entry_str = entry.path().display().to_string();
         if entry_str.contains(' ') && !ctx.in_double && !ctx.in_single {
@@ -480,7 +478,7 @@ fn file_completor<P>(
 
         if entry.path().is_dir() {
             // Insert path separator after name if directory
-            buf.insert(MAIN_SEPARATOR);
+            buf.insert_norecord(MAIN_SEPARATOR);
         } else {
             // Insert whitespace otherwise; close the quote if necessary.
             if ctx.in_single || ctx.in_double {
@@ -490,11 +488,11 @@ fn file_completor<P>(
                     buf.move_right(1);
                 } else {
                     // Close this quote
-                    buf.insert(quote);
+                    buf.insert_norecord(quote);
                 }
             }
             // Insert whitespace
-            buf.insert(' ');
+            buf.insert_norecord(' ');
         }
     } else {
         // Set list of file names
@@ -1038,6 +1036,10 @@ impl LineBuffer {
 
     pub fn insert(&mut self, ch: char) {
         self.record_history();
+        self.insert_norecord(ch)
+    }
+
+    fn insert_norecord(&mut self, ch: char) {
         self.buf.insert(self.cursor_at, ch);
         self.cursor_at += 1;
     }
@@ -1132,6 +1134,8 @@ impl LineBuffer {
         R: RangeBounds<usize>,
         I: IntoIterator<Item = char>,
     {
+        self.record_history();
+
         use std::ops::Bound::*;
         let range_start = match range.start_bound() {
             Included(&n) => n,
@@ -1157,7 +1161,9 @@ impl LineBuffer {
         assert!(self.cursor_at <= self.buf.len());
 
         // Insert each chars
-        new_chars.into_iter().for_each(|ch| self.insert(ch));
+        new_chars
+            .into_iter()
+            .for_each(|ch| self.insert_norecord(ch));
     }
 
     fn word_start_before(&self, n: usize) -> usize {
