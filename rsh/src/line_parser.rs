@@ -302,6 +302,11 @@ impl<'a> ArgParser<'a> {
                     't' => Ok(ArgAtom::Char('\t')),
                     ESCAPE_CHAR => Ok(ArgAtom::Char(ESCAPE_CHAR)),
                     ' ' => Ok(ArgAtom::Char(' ')),
+                    '(' => Ok(ArgAtom::Char('(')),
+                    ')' => Ok(ArgAtom::Char(')')),
+                    '|' => Ok(ArgAtom::Char('|')),
+                    '<' => Ok(ArgAtom::Char('<')),
+                    '>' => Ok(ArgAtom::Char('>')),
                     _ => bail!("unknown escape sequence: ^{}", next),
                 }
             }

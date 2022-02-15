@@ -468,9 +468,16 @@ fn file_completor<P>(
         // Unique entry; complete it.
         let entry = &entries[0];
         let mut entry_str = entry.path().display().to_string();
-        if entry_str.contains(' ') && !ctx.in_double && !ctx.in_single {
+        if !ctx.in_double && !ctx.in_single {
             if let Some(escape_char) = escape_char {
-                entry_str = entry_str.replace(' ', &format!("{} ", escape_char));
+                let escape = |ch| format!("{}{}", escape_char, ch);
+                entry_str = entry_str
+                    .replace(escape_char, &escape(escape_char))
+                    .replace(' ', &escape(' '))
+                    .replace('(', &escape('('))
+                    .replace(')', &escape(')'))
+                    .replace('<', &escape('<'))
+                    .replace('>', &escape('>'));
             }
         }
 
@@ -518,9 +525,16 @@ fn file_completor<P>(
         } else {
             prefix.to_string()
         };
-        if completion.contains(' ') && !ctx.in_double && !ctx.in_single {
+        if !ctx.in_double && !ctx.in_single {
             if let Some(escape_char) = escape_char {
-                completion = completion.replace(' ', &format!("{} ", escape_char));
+                let escape = |ch| format!("{}{}", escape_char, ch);
+                completion = completion
+                    .replace(escape_char, &escape(escape_char))
+                    .replace(' ', &escape(' '))
+                    .replace('(', &escape('('))
+                    .replace(')', &escape(')'))
+                    .replace('<', &escape('<'))
+                    .replace('>', &escape('>'));
             }
         }
         buf.replace_range(start..buf.cursor_at, completion.chars());
