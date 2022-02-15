@@ -517,6 +517,9 @@ fn file_completor<P>(
                 .expect("internal error: even empty string is not equal");
             &a[..idx]
         }
+
+        // Insert **lower case** common prefix.
+        let entries: Vec<_> = entries.iter().map(|s| s.to_lowercase()).collect();
         let mut iter = entries.iter();
         let first = iter.next().expect("internal error: entries is empty");
         let prefix = iter.fold(&**first, |prefix, next| common_prefix(prefix, next));
