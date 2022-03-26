@@ -1,4 +1,10 @@
 mod cmdline;
+#[cfg(windows)]
+#[path = "conmode_windows.rs"]
+mod conmode;
+#[cfg(not(windows))]
+#[path = "conmode_other.rs"]
+mod conmode;
 mod ctrlc_handler;
 mod line_parser;
 mod shell;

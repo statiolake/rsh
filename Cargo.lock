@@ -337,6 +337,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "crossterm",
+ "crossterm_winapi",
  "ctrlc",
  "dirs",
  "itertools",

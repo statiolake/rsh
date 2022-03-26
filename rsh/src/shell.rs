@@ -1,4 +1,5 @@
 use crate::cmdline::*;
+use crate::conmode::ConsoleModeKeeper;
 use crate::ctrlc_handler::register_child;
 use crate::line_parser::{ArgsCompositionParser, Cursor, ESCAPE_CHAR};
 use anyhow::Result;
@@ -49,6 +50,8 @@ impl Shell {
     pub fn read_and_run(&mut self) -> Result<()> {
         let cmdline = self.read_line()?;
         let composition = parse_cmdline(&cmdline)?;
+
+        let _keeper = ConsoleModeKeeper::new()?;
         self.state.run_compsition_inherit(composition)
     }
 
