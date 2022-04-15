@@ -40,9 +40,18 @@ impl Shell {
 
     pub fn mainloop(&mut self) {
         self.state.loop_running = true;
+        #[allow(clippy::while_immutable_condition)]
         while self.state.loop_running {
-            if let Err(e) = self.read_and_run() {
-                print_error(e);
+            let res = crossbeam::scope(|scope| {
+                scope.spawn(|_| {
+                    if let Err(e) = self.read_and_run() {
+                        print_error(e);
+                    }
+                });
+            });
+
+            if res.is_err() {
+                eprintln!("!INTERNAL ERROR! panicked.");
             }
         }
     }
