@@ -33,6 +33,9 @@ pub enum TokenKind {
     /// Redirect (like <). RedirectReferenceKind is Some() when there's redirect reference (like
     /// &1), otherwise None. When None, succeeding Atoms should be treated as file name.
     Redirect(Redirect),
+
+    /// Pipe operator (`|`).
+    Pipe,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +226,7 @@ impl<'a> Lexer<'a> {
             ['\'', ..] => into!(self.next_single_quoted()),
             ['"', ..] => into!(self.next_double_quoted()),
             ['>' | '<', ..] | ['1' | '2', '>', ..] => into!(self.next_redirect()),
+            ['|', ..] => into!(self.next_delim()),
             _ => into!(self.next_atom()),
         }
     }
@@ -311,6 +315,20 @@ impl<'a> Lexer<'a> {
             data: Redirect { kind, reference },
             span,
         })
+    }
+
+    fn next_delim(&mut self) -> Result<Token> {
+        match self.peek() {
+            Some('|') => {
+                let span = self.eat(['|']);
+                Ok(Token {
+                    data: TokenKind::Pipe,
+                    span,
+                })
+            }
+            Some(ch) => panic!("internal error: unknown delimiter `{}`", ch),
+            None => panic!("internal error: no delimiter"),
+        }
     }
 
     fn next_escaped_sequence(&mut self) -> Result<Spanned<char>> {
