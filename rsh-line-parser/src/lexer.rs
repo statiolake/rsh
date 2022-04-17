@@ -30,15 +30,13 @@ pub enum TokenKind {
     /// Argument delimiter. Usually an whitespace (outside of quotes).
     Delim,
 
-    /// Redirect (like <).
-    Redirect(RedirectKind),
-
-    /// Redirect reference (like &1).
-    RedirectReference(RedirectReferenceKind),
+    /// Redirect (like <). RedirectReferenceKind is Some() when there's redirect reference (like
+    /// &1), otherwise None. When None, succeeding Atoms should be treated as file name.
+    Redirect(Redirect),
 }
 
 #[derive(Debug, Clone)]
-pub struct SingleQuoted(Vec<char>);
+pub struct SingleQuoted(pub Vec<char>);
 impl From<SingleQuoted> for TokenKind {
     fn from(v: SingleQuoted) -> Self {
         TokenKind::SingleQuoted(v)
@@ -46,7 +44,7 @@ impl From<SingleQuoted> for TokenKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct DoubleQuoted(Vec<AtomKind>);
+pub struct DoubleQuoted(pub Vec<AtomKind>);
 impl From<DoubleQuoted> for TokenKind {
     fn from(v: DoubleQuoted) -> Self {
         TokenKind::DoubleQuoted(v)
@@ -83,7 +81,7 @@ impl From<char> for AtomKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct EnvVar(String);
+pub struct EnvVar(pub String);
 impl From<EnvVar> for TokenKind {
     fn from(v: EnvVar) -> Self {
         Self::Atom(AtomKind::EnvVar(v))
@@ -96,7 +94,7 @@ impl From<EnvVar> for AtomKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct SubShell(Vec<Token>);
+pub struct SubShell(pub Vec<Token>);
 impl From<SubShell> for TokenKind {
     fn from(v: SubShell) -> Self {
         Self::Atom(AtomKind::SubShell(v))
@@ -114,42 +112,62 @@ pub enum RedirectKind {
     Stdout,
     Stderr,
 }
-impl From<RedirectKind> for TokenKind {
-    fn from(v: RedirectKind) -> Self {
-        Self::Redirect(v)
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum RedirectReferenceKind {
     Stdout,
     Stderr,
 }
-impl From<RedirectReferenceKind> for TokenKind {
-    fn from(v: RedirectReferenceKind) -> Self {
-        Self::RedirectReference(v)
+
+impl RedirectKind {
+    pub fn is_output(self) -> bool {
+        matches!(self, RedirectKind::Stdout | RedirectKind::Stderr)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Redirect {
+    pub kind: RedirectKind,
+    pub reference: Option<RedirectReferenceKind>,
+}
+impl From<Redirect> for TokenKind {
+    fn from(v: Redirect) -> Self {
+        Self::Redirect(v)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("found '{}' but no following character found", ESCAPE_CHAR)]
-    NoEscapedChar(Span),
+    NoEscapedChar { span: Span },
 
-    #[error("invalid escape sequence '{}{}'", ESCAPE_CHAR, .0.data)]
-    InvalidEscapeSequence(Spanned<char>),
+    #[error("invalid escape sequence '{}{}'", ESCAPE_CHAR, ch)]
+    InvalidEscapeSequence { span: Span, ch: char },
 
     #[error("no environment variable or subshell invocation")]
-    NoEnvVarOrSubShell(Span),
+    NoEnvVarOrSubShell { span: Span },
 
     #[error("subshell invocation is not ended")]
-    UnbalancedSubShell(Span),
+    UnbalancedSubShell { span: Span },
 
     #[error("environment variable is not ended")]
-    UnbalancedEnvVarBrace(Span),
+    UnbalancedEnvVarBrace { span: Span },
 
     #[error("quoted string is not ended")]
-    UnbalancedQuotedString(Span),
+    UnbalancedQuotedString { span: Span },
+}
+
+impl Error {
+    pub fn span(&self) -> Span {
+        match self {
+            Error::NoEscapedChar { span } => *span,
+            Error::InvalidEscapeSequence { span, .. } => *span,
+            Error::NoEnvVarOrSubShell { span } => *span,
+            Error::UnbalancedSubShell { span } => *span,
+            Error::UnbalancedEnvVarBrace { span } => *span,
+            Error::UnbalancedQuotedString { span } => *span,
+        }
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -193,22 +211,29 @@ impl<'a> Lexer<'a> {
             });
         };
 
-        match self.peek().expect("internal error: no token found") {
-            ESCAPE_CHAR => self.next_escaped_sequence().map(|v| v.map(Into::into)),
-            '\'' => self.next_single_quoted().map(|v| v.map(Into::into)),
-            '"' => self.next_double_quoted().map(|v| v.map(Into::into)),
-            // TODO: redirects
-            _ => self.next_atom().map(|v| v.map(Into::into)),
+        macro_rules! into {
+            ($e:expr) => {
+                $e.map(|v| v.map(Into::into))
+            };
+        }
+
+        match self.peek_rest() {
+            [] => panic!("internal error: no token found"),
+            [ESCAPE_CHAR, ..] => into!(self.next_escaped_sequence()),
+            ['\'', ..] => into!(self.next_single_quoted()),
+            ['"', ..] => into!(self.next_double_quoted()),
+            ['>' | '<', ..] | ['1' | '2', '>', ..] => into!(self.next_redirect()),
+            _ => into!(self.next_atom()),
         }
     }
 
     fn next_single_quoted(&mut self) -> Result<Spanned<SingleQuoted>> {
-        let mut span = self.eat(Some('\''));
+        let mut span = self.eat(['\'']);
         let mut chars = Vec::new();
         while let Some(ch) = self.peek() {
             match ch {
                 '\'' => {
-                    span = span.merged(self.eat(Some(ch)));
+                    span = span.merged(self.eat([ch]));
                     return Ok(Spanned {
                         data: SingleQuoted(chars),
                         span,
@@ -222,79 +247,80 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Err(Error::UnbalancedQuotedString(span))
+        Err(Error::UnbalancedQuotedString { span })
     }
 
     fn next_double_quoted(&mut self) -> Result<Spanned<DoubleQuoted>> {
-        let mut span = self.eat(Some('"'));
+        let mut span = self.eat(['"']);
         let mut atoms = Vec::new();
         while let Some(ch) = self.peek() {
             match ch {
                 '"' => {
-                    span = span.merged(self.eat(Some(ch)));
+                    span = span.merged(self.eat([ch]));
                     return Ok(Spanned {
                         data: DoubleQuoted(atoms),
                         span,
                     });
                 }
-                ESCAPE_CHAR => {
-                    let esc = self.next_escaped_sequence()?;
-                    span = span.merged(esc.span);
-                    atoms.push(AtomKind::Char(esc.data));
-                }
-                ch => {
-                    span = span.merged(self.eat(Some(ch)));
-                    atoms.push(AtomKind::Char(ch));
+                _ => {
+                    let atom = self.next_atom()?;
+                    span = span.merged(atom.span);
+                    atoms.push(atom.data);
                 }
             }
         }
 
-        Err(Error::UnbalancedQuotedString(span))
+        Err(Error::UnbalancedQuotedString { span })
     }
 
-    // fn next_envvar(&mut self) -> Result<impl IntoIterator<Item = Token>> {
-    //     let mut res = Vec::new();
-    //
-    //     let (span, brace) = match self.lookahead(1) {
-    //         Some('{') => (self.eat("${".chars()), true),
-    //         _ => (self.eat(Some('$')), false),
-    //     };
-    //     res.push(Token {
-    //         data: TokenKind::EnvVarStart,
-    //         span,
-    //     });
-    //
-    //     while let Some(ch) = self.peek() {
-    //         match ch {
-    //             '}' if brace => break,
-    //             ch if brace || ch.is_ascii_alphabetic() || ch == '_' => res.push(Token {
-    //                 data: TokenKind::Atom(ch),
-    //                 span: Some(self.eat(Some(ch))),
-    //             }),
-    //             _ => break,
-    //         }
-    //     }
-    //
-    //     let span = if brace {
-    //         if self.peek() != Some('}') {
-    //             return Err(Error::UnbalancedEnvVarBrace);
-    //         }
-    //         Some(self.eat(Some('}')))
-    //     } else {
-    //         None
-    //     };
-    //
-    //     res.push(Token {
-    //         data: TokenKind::EnvVarEnd,
-    //         span,
-    //     });
-    //
-    //     Ok(res)
-    // }
+    fn next_redirect(&mut self) -> Result<Spanned<Redirect>> {
+        let mut span = self.span_for_current_point();
+        let kind = match self.peek_rest() {
+            ['>', ..] => {
+                span = span.merged(self.eat(['>']));
+                RedirectKind::Stdout
+            }
+            ['<', ..] => {
+                span = span.merged(self.eat(['<']));
+                RedirectKind::Stdin
+            }
+            ['1', '>', ..] => {
+                span = span.merged(self.eat(['1', '>']));
+                RedirectKind::Stdout
+            }
+            ['2', '>', ..] => {
+                span = span.merged(self.eat(['2', '>']));
+                RedirectKind::Stderr
+            }
+            _ => panic!("internal error: tried to parse non-redirect"),
+        };
+
+        let reference = match self.peek_rest() {
+            ['&', '1'] if kind.is_output() => {
+                span = span.merged(self.eat(['&', '1']));
+                Some(RedirectReferenceKind::Stdout)
+            }
+            ['&', '2'] if kind.is_output() => {
+                span = span.merged(self.eat(['&', '2']));
+                Some(RedirectReferenceKind::Stderr)
+            }
+            _ => None,
+        };
+
+        Ok(Spanned {
+            data: Redirect { kind, reference },
+            span,
+        })
+    }
 
     fn next_escaped_sequence(&mut self) -> Result<Spanned<char>> {
+        assert!(
+            self.peek() == Some(ESCAPE_CHAR),
+            "internal error: escaped sequence not starting with `{}`",
+            ESCAPE_CHAR
+        );
+
         match self.lookahead(1) {
-            None => Err(Error::NoEscapedChar(self.eat(Some(ESCAPE_CHAR)))),
             Some(ch) if SHOULD_ESCAPE_CHAR.contains(&ch) => {
                 let span = self.eat([ESCAPE_CHAR, ch]);
                 Ok(Spanned { data: ch, span })
@@ -309,8 +335,11 @@ impl<'a> Lexer<'a> {
             }
             Some(ch) => {
                 let span = self.eat([ESCAPE_CHAR, ch]);
-                Err(Error::InvalidEscapeSequence(Spanned { data: ch, span }))
+                Err(Error::InvalidEscapeSequence { span, ch })
             }
+            None => Err(Error::NoEscapedChar {
+                span: self.eat([ESCAPE_CHAR]),
+            }),
         }
     }
 
@@ -318,23 +347,21 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(ESCAPE_CHAR) => self.next_escaped_sequence(),
             Some(ch) => {
-                let span = self.eat(Some(ch));
+                let span = self.eat([ch]);
                 Ok(Spanned { data: ch, span })
             }
             None => panic!("internal error: no next character"),
         }
     }
 
-    fn next_word(&mut self) -> Result<Spanned<String>> {
+    fn next_ascii_word(&mut self) -> Result<Spanned<String>> {
         let mut span = self.span_for_current_point();
         let mut word = String::new();
         while let Some(ch) = self.peek() {
-            if !ch.is_alphabetic() {
+            if !ch.is_ascii_alphanumeric() {
                 break;
             }
-
-            let ch_span = self.eat(Some(ch));
-            span = span.merged(ch_span);
+            span = span.merged(self.eat([ch]));
             word.push(ch);
         }
 
@@ -342,17 +369,19 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_subshell(&mut self) -> Result<Spanned<SubShell>> {
-        let mut span = self.eat("$(".chars());
+        let mut span = self.eat(['$', '(']);
         self.subshell_level += 1;
+
         let tokens = self.tokenize()?;
-        self.subshell_level -= 1;
         for token in &tokens {
             span = span.merged(token.span);
         }
         if self.peek() != Some(')') {
-            return Err(Error::UnbalancedSubShell(span));
+            return Err(Error::UnbalancedSubShell { span });
         }
-        span = span.merged(self.eat(Some(')')));
+        span = span.merged(self.eat([')']));
+
+        self.subshell_level -= 1;
 
         Ok(Spanned {
             data: SubShell(tokens),
@@ -361,23 +390,25 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_envvar(&mut self) -> Result<Spanned<EnvVar>> {
-        let mut span = self.eat(Some('$'));
-        let varname = match self.peek() {
-            Some('{') => {
-                span = span.merged(self.eat(Some('{')));
-                let varname = self.next_word()?;
+        let mut span = self.span_for_current_point();
+        let varname = match self.peek_rest() {
+            ['$', '{', ..] => {
+                span = span.merged(self.eat(['$', '{']));
+                let varname = self.next_ascii_word()?;
                 span = span.merged(varname.span);
                 if self.peek() != Some('}') {
-                    return Err(Error::UnbalancedEnvVarBrace(span));
+                    return Err(Error::UnbalancedEnvVarBrace { span });
                 }
-                span = span.merged(self.eat(Some('}')));
+                span = span.merged(self.eat(['}']));
                 varname.data
             }
-            _ => {
-                let varname = self.next_word()?;
+            ['$', ..] => {
+                span = span.merged(self.eat(['$']));
+                let varname = self.next_ascii_word()?;
                 span = span.merged(varname.span);
                 varname.data
             }
+            _ => panic!("internal error: envvar not starting with `$`"),
         };
 
         Ok(Spanned {
@@ -387,17 +418,16 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_atom(&mut self) -> Result<Spanned<AtomKind>> {
-        match self.peek() {
-            Some('$') => match self.lookahead(1) {
-                Some('(') => self.next_subshell().map(|v| v.map(|v| v.into())),
-                Some(_) => self.next_envvar().map(|v| v.map(|v| v.into())),
-                None => {
-                    let span = self.eat(Some('$'));
-                    Err(Error::NoEnvVarOrSubShell(span))
-                }
-            },
-            Some(ESCAPE_CHAR) => self.next_escaped_sequence().map(|v| v.map(|v| v.into())),
-            None => todo!(),
+        macro_rules! into {
+            ($e:expr) => {
+                $e.map(|v| v.map(|v| v.into()))
+            };
+        }
+        match self.peek_rest() {
+            ['$', '(', ..] => into!(self.next_subshell()),
+            ['$', ..] => into!(self.next_envvar()),
+            [ESCAPE_CHAR, ..] => into!(self.next_escaped_sequence()),
+            _ => into!(self.next_char()),
         }
     }
 
@@ -405,7 +435,7 @@ impl<'a> Lexer<'a> {
         let mut span: Option<Span> = None;
         while let Some(ch) = self.peek() {
             if ch.is_whitespace() {
-                let ch_span = self.eat(Some(ch));
+                let ch_span = self.eat([ch]);
                 span = match span {
                     Some(span) => Some(span.merged(ch_span)),
                     None => Some(ch_span),
@@ -424,7 +454,7 @@ impl<'a> Lexer<'a> {
             assert_eq!(
                 self.peek(),
                 Some(ch),
-                "internal error: unexpected character: {}",
+                "internal error: unexpected character `{}`",
                 ch
             );
             self.current += 1;
@@ -446,6 +476,10 @@ impl<'a> Lexer<'a> {
 
     fn lookahead(&self, n: usize) -> Option<char> {
         self.source.get(self.current + n).copied()
+    }
+
+    fn peek_rest(&self) -> &[char] {
+        &self.source[self.current..]
     }
 
     // fn span(&self, lookahead: usize) -> Span {

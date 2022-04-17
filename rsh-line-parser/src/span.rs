@@ -9,7 +9,7 @@ impl Span {
         self.end == other.start
     }
 
-    pub fn merged(&mut self, other: Self) -> Self {
+    pub fn merged(self, other: Self) -> Self {
         debug_assert!(self.is_followed_by(other));
         Self {
             start: self.start,
