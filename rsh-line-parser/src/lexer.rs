@@ -28,7 +28,7 @@ pub enum TokenKind {
     DoubleQuoted(DoubleQuoted),
 
     /// Argument delimiter. Usually an whitespace (outside of quotes).
-    Delim,
+    ArgDelim,
 
     /// Redirect (like <). RedirectReferenceKind is Some() when there's redirect reference (like
     /// &1), otherwise None. When None, succeeding Atoms should be treated as file name.
@@ -206,7 +206,7 @@ impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Result<Token> {
         if let Some(span) = self.skip_whitespace() {
             return Ok(Token {
-                data: TokenKind::Delim,
+                data: TokenKind::ArgDelim,
                 span,
             });
         };
