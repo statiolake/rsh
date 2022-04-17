@@ -36,6 +36,9 @@ pub enum TokenKind {
 
     /// Pipe operator (`|`).
     Pipe,
+
+    /// Command delimiter (`;`)
+    Delim,
 }
 
 #[derive(Debug, Clone)]
@@ -226,7 +229,7 @@ impl<'a> Lexer<'a> {
             ['\'', ..] => into!(self.next_single_quoted()),
             ['"', ..] => into!(self.next_double_quoted()),
             ['>' | '<', ..] | ['1' | '2', '>', ..] => into!(self.next_redirect()),
-            ['|', ..] => into!(self.next_delim()),
+            ['|' | ';', ..] => into!(self.next_delim()),
             _ => into!(self.next_atom()),
         }
     }
@@ -323,6 +326,13 @@ impl<'a> Lexer<'a> {
                 let span = self.eat(['|']);
                 Ok(Token {
                     data: TokenKind::Pipe,
+                    span,
+                })
+            }
+            Some(';') => {
+                let span = self.eat([';']);
+                Ok(Token {
+                    data: TokenKind::Delim,
                     span,
                 })
             }
