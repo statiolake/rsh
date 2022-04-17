@@ -16,7 +16,7 @@ pub const SHOULD_ESCAPE_CHAR: [char; 12] = [
     '\'',
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TokenKind {
     /// Normal atom.
     Atom(AtomKind),
@@ -41,23 +41,48 @@ pub enum TokenKind {
     Delim,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SingleQuoted(pub Vec<char>);
 impl From<SingleQuoted> for TokenKind {
     fn from(v: SingleQuoted) -> Self {
         TokenKind::SingleQuoted(v)
     }
 }
+impl From<Vec<char>> for SingleQuoted {
+    fn from(v: Vec<char>) -> Self {
+        Self(v)
+    }
+}
+impl From<&[char]> for SingleQuoted {
+    fn from(v: &[char]) -> Self {
+        Self(v.to_vec())
+    }
+}
+impl From<&str> for SingleQuoted {
+    fn from(v: &str) -> Self {
+        Self(v.chars().collect())
+    }
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DoubleQuoted(pub Vec<AtomKind>);
 impl From<DoubleQuoted> for TokenKind {
     fn from(v: DoubleQuoted) -> Self {
         TokenKind::DoubleQuoted(v)
     }
 }
+impl From<Vec<AtomKind>> for DoubleQuoted {
+    fn from(v: Vec<AtomKind>) -> Self {
+        DoubleQuoted(v)
+    }
+}
+impl From<&[AtomKind]> for DoubleQuoted {
+    fn from(v: &[AtomKind]) -> Self {
+        DoubleQuoted(v.to_vec())
+    }
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AtomKind {
     /// Normal character.
     Char(char),
@@ -86,7 +111,7 @@ impl From<char> for AtomKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct EnvVar(pub String);
 impl From<EnvVar> for TokenKind {
     fn from(v: EnvVar) -> Self {
@@ -98,8 +123,13 @@ impl From<EnvVar> for AtomKind {
         Self::EnvVar(v)
     }
 }
+impl From<&str> for EnvVar {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SubShell(pub Vec<Token>);
 impl From<SubShell> for TokenKind {
     fn from(v: SubShell) -> Self {
@@ -111,15 +141,20 @@ impl From<SubShell> for AtomKind {
         Self::SubShell(v)
     }
 }
+impl From<&[Token]> for SubShell {
+    fn from(v: &[Token]) -> Self {
+        Self(v.to_vec())
+    }
+}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum RedirectKind {
     Stdin,
     Stdout,
     Stderr,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum RedirectReferenceKind {
     Stdout,
     Stderr,
@@ -131,7 +166,7 @@ impl RedirectKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Redirect {
     pub kind: RedirectKind,
     pub reference: Option<RedirectReferenceKind>,
@@ -139,6 +174,22 @@ pub struct Redirect {
 impl From<Redirect> for TokenKind {
     fn from(v: Redirect) -> Self {
         Self::Redirect(v)
+    }
+}
+impl From<RedirectKind> for Redirect {
+    fn from(kind: RedirectKind) -> Self {
+        Self {
+            kind,
+            reference: None,
+        }
+    }
+}
+impl From<(RedirectKind, RedirectReferenceKind)> for Redirect {
+    fn from((kind, reference): (RedirectKind, RedirectReferenceKind)) -> Self {
+        Self {
+            kind,
+            reference: Some(reference),
+        }
     }
 }
 
@@ -509,11 +560,337 @@ impl<'a> Lexer<'a> {
     fn peek_rest(&self) -> &[char] {
         &self.source[self.current..]
     }
+}
 
-    // fn span(&self, lookahead: usize) -> Span {
-    //     Span {
-    //         start: self.current,
-    //         end: self.current + lookahead + 1,
-    //     }
-    // }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use itertools::Itertools;
+    use pretty_assertions::assert_eq;
+
+    macro_rules! atom {
+        (ss $ss:expr) => {
+            AtomKind::from(SubShell::from(&$ss[..]))
+        };
+        (env $env:expr) => {
+            AtomKind::from(EnvVar::from(&*$env))
+        };
+        ($atom:expr) => {
+            AtomKind::from($atom)
+        };
+    }
+
+    macro_rules! tok {
+        ($range:expr, atom $($atom:tt)*) => {
+            Token {
+                data: atom!($($atom)*).into(),
+                span: $range.into(),
+            }
+        };
+        ($range:expr, squote $squote:expr) => {
+            Token {
+                data: SingleQuoted::from(&*$squote).into(),
+                span: $range.into(),
+            }
+        };
+        ($range:expr, dquote $dquote:expr) => {
+            Token {
+                data: DoubleQuoted::from(&$dquote[..]).into(),
+                span: $range.into(),
+            }
+        };
+        ($range:expr, argd) => {
+            Token {
+                data: TokenKind::ArgDelim,
+                span: $range.into(),
+            }
+        };
+        ($range:expr, redir $redir:expr) => {
+            Token {
+                data: Redirect::from($redir).into(),
+                span: $range.into(),
+            }
+        };
+        ($range:expr, pipe) => {
+            Token {
+                data: TokenKind::Pipe,
+                span: $range.into(),
+            }
+        };
+    }
+
+    fn tokenize_str(s: &str) -> Vec<Token> {
+        Lexer::new(&s.chars().collect_vec())
+            .tokenize()
+            .expect("should parse")
+    }
+
+    #[test]
+    fn single() {
+        let tokens = tokenize_str("ls");
+        let expected = [tok!(0..1, atom 'l'), tok!(1..2, atom 's')];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn single_arg() {
+        let tokens = tokenize_str("ls -al");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, atom '-'),
+            tok!(4..5, atom 'a'),
+            tok!(5..6, atom 'l'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn duplicate_whitespace() {
+        let tokens = tokenize_str("ls   -al");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..5, argd),
+            tok!(5..6, atom '-'),
+            tok!(6..7, atom 'a'),
+            tok!(7..8, atom 'l'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn multiple_args() {
+        let tokens = tokenize_str("ls a b c");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, atom 'a'),
+            tok!(4..5, argd),
+            tok!(5..6, atom 'b'),
+            tok!(6..7, argd),
+            tok!(7..8, atom 'c'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn envvar() {
+        let tokens = tokenize_str("echo $ABC def");
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..9, atom env "ABC"),
+            tok!(9..10, argd),
+            tok!(10..11, atom 'd'),
+            tok!(11..12, atom 'e'),
+            tok!(12..13, atom 'f'),
+        ];
+        assert_eq!(tokens, expected);
+
+        let tokens = tokenize_str("echo ${ABC} def");
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..11, atom env "ABC"),
+            tok!(11..12, argd),
+            tok!(12..13, atom 'd'),
+            tok!(13..14, atom 'e'),
+            tok!(14..15, atom 'f'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn subshell() {
+        let tokens = tokenize_str("echo $(ls) def");
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..10, atom ss [
+                tok!(7..8, atom 'l'),
+                tok!(8..9, atom 's'),
+            ]),
+            tok!(10..11, argd),
+            tok!(11..12, atom 'd'),
+            tok!(12..13, atom 'e'),
+            tok!(13..14, atom 'f'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn subshell_args() {
+        let tokens = tokenize_str("echo $(ls -al) def");
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..14, atom ss [
+                tok!(7..8, atom 'l'),
+                tok!(8..9, atom 's'),
+                tok!(9..10, argd),
+                tok!(10..11, atom '-'),
+                tok!(11..12, atom 'a'),
+                tok!(12..13, atom 'l'),
+            ]),
+            tok!(14..15, argd),
+            tok!(15..16, atom 'd'),
+            tok!(16..17, atom 'e'),
+            tok!(17..18, atom 'f'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn subsubshell() {
+        let tokens = tokenize_str("echo $(ls $(ls)) def");
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..16, atom ss [
+                tok!(7..8, atom 'l'),
+                tok!(8..9, atom 's'),
+                tok!(9..10, argd),
+                tok!(10..15, atom ss [
+                    tok!(12..13, atom 'l'),
+                    tok!(13..14, atom 's'),
+                ]),
+            ]),
+            tok!(16..17, argd),
+            tok!(17..18, atom 'd'),
+            tok!(18..19, atom 'e'),
+            tok!(19..20, atom 'f'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn dquote() {
+        let tokens = tokenize_str(r#"echo "a b""#);
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..10, dquote [
+                atom!('a'),
+                atom!(' '),
+                atom!('b'),
+            ]),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn dquote_envvar() {
+        let tokens = tokenize_str(r#"echo "a $var c""#);
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..15, dquote [
+                atom!('a'),
+                atom!(' '),
+                atom!(env "var"),
+                atom!(' '),
+                atom!('c'),
+            ]),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn squote() {
+        let tokens = tokenize_str(r#"echo 'a b'"#);
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..10, squote "a b"),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn squote_envvar() {
+        let tokens = tokenize_str(r#"echo 'a $var c'"#);
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..15, squote "a $var c"),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn redirect() {
+        use RedirectKind as RK;
+        let tokens = tokenize_str("ls > file.txt");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, redir RK::Stdout),
+            tok!(4..5, argd),
+            tok!(5..6, atom 'f'),
+            tok!(6..7, atom 'i'),
+            tok!(7..8, atom 'l'),
+            tok!(8..9, atom 'e'),
+            tok!(9..10, atom '.'),
+            tok!(10..11, atom 't'),
+            tok!(11..12, atom 'x'),
+            tok!(12..13, atom 't'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn redirect_reference() {
+        use RedirectKind as RK;
+        use RedirectReferenceKind as RRK;
+        let tokens = tokenize_str("ls > file.txt 2>&1");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, redir RK::Stdout),
+            tok!(4..5, argd),
+            tok!(5..6, atom 'f'),
+            tok!(6..7, atom 'i'),
+            tok!(7..8, atom 'l'),
+            tok!(8..9, atom 'e'),
+            tok!(9..10, atom '.'),
+            tok!(10..11, atom 't'),
+            tok!(11..12, atom 'x'),
+            tok!(12..13, atom 't'),
+            tok!(13..14, argd),
+            tok!(14..18, redir(RK::Stderr, RRK::Stdout)),
+        ];
+        assert_eq!(tokens, expected);
+    }
 }
