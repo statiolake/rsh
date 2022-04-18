@@ -250,10 +250,12 @@ impl<'a> Lexer<'a> {
     pub fn tokenize(&mut self) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
 
-        // Get tokens while there is another token. "There is another token" if:
-        // - there is another char when it is not subshell (subshell_level == 0), or
-        // - there is another char other than ')' if it is subshell (subshell_level > 0).
-        while matches!(self.peek(), Some(ch) if self.subshell_level == 0 || ch != ')') {
+        while let Some(ch) = self.peek() {
+            if self.subshell_level > 0 && ch == ')' {
+                // If tokenize in subshell, stop tokenizing at ')'.
+                break;
+            }
+
             tokens.push(self.next_token()?);
         }
 
@@ -283,6 +285,47 @@ impl<'a> Lexer<'a> {
             ['|' | ';', ..] => into!(self.next_delim()),
             _ => into!(self.next_atom()),
         }
+    }
+
+    /// Tokenize as if it is quoted. Usually called when tokenizing subshell invocation inside the
+    /// double quote.
+    ///
+    /// ## Note
+    ///
+    /// In this mode, everything is treated as simple string (except for whitespace; when `delim` is
+    /// `true`, whitespaces are treated as ArgDelim, otherwise just a whitespace character.) For
+    /// example, environmental variables substitution or subshell invocation won't be parsed.
+    ///
+    /// ## Examples
+    ///
+    /// ```console
+    /// > echo $(echo '$(ls)')
+    /// $(ls)
+    /// ```
+    ///
+    /// At first lowering the command line text will be `echo $(ls)`, but it's not subshell
+    /// invocation here. Much like `echo '$(ls)'`.
+    pub fn partial_tokenize(&mut self, delim: bool) -> Result<Vec<Token>> {
+        let mut tokens = Vec::new();
+
+        while self.peek().is_some() {
+            tokens.push(self.partial_next_token(delim)?);
+        }
+
+        Ok(tokens)
+    }
+
+    pub fn partial_next_token(&mut self, delim: bool) -> Result<Token> {
+        if delim {
+            if let Some(span) = self.skip_whitespace() {
+                return Ok(Token {
+                    data: TokenKind::ArgDelim,
+                    span,
+                });
+            }
+        }
+
+        self.next_char().map(|tok| tok.map(Into::into))
     }
 
     fn next_single_quoted(&mut self) -> Result<Spanned<SingleQuoted>> {
@@ -505,7 +548,6 @@ impl<'a> Lexer<'a> {
         match self.peek_rest() {
             ['$', '(', ..] => into!(self.next_subshell()),
             ['$', ..] => into!(self.next_envvar()),
-            [ESCAPE_CHAR, ..] => into!(self.next_escaped_sequence()),
             _ => into!(self.next_char()),
         }
     }
