@@ -10,7 +10,7 @@ use crossterm::terminal::{size as term_size, Clear, ClearType};
 use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::{self, Display};
+use std::fmt::{self, Display, Write as _};
 use std::fs::read_dir;
 use std::io::{self, StdoutLock, Write};
 use std::mem::take;
@@ -27,13 +27,13 @@ pub enum UserInput {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("rle error: prompt failed")]
-    PromptError(anyhow::Error),
+    PromptError(#[source] anyhow::Error),
 
     #[error("rle error: terminal operation failed")]
-    CrosstermError(crossterm::ErrorKind),
+    CrosstermError(#[source] crossterm::ErrorKind),
 
     #[error("rle error: IO failed")]
-    IOError(io::Error),
+    IOError(#[source] io::Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -377,7 +377,7 @@ fn handle_completion<P>(
         let mut escaped = false;
         arg = arg
             .chars()
-            .map(|ch| match ch {
+            .flat_map(|ch| match ch {
                 ch if escaped => {
                     escaped = false;
                     Some(ch)
@@ -388,7 +388,6 @@ fn handle_completion<P>(
                 }
                 ch => Some(ch),
             })
-            .flatten()
             .collect();
     }
 
@@ -855,7 +854,7 @@ impl<'a, P> LinePrinter<'a, P> {
             let (entry, width, _) = &entries[idx];
             let num_padding = col_width.saturating_sub(*width);
             let padding = " ".repeat(num_padding);
-            res[idx % rows].push_str(&format!("{}{}", entry, padding));
+            write!(res[idx % rows], "{}{}", entry, padding).unwrap();
         }
 
         res
