@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::token::{FlattenedToken, FlattenedTokenKind};
+use crate::token::{DoubleQuoted, FlattenedToken, FlattenedTokenKind, SingleQuoted};
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
@@ -159,13 +159,12 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
 }
 
 fn toks_to_string(toks: &[FlattenedToken]) -> String {
-    use FlattenedTokenKind::*;
-
     let mut arg = String::new();
     for tok in toks {
         match &tok.data {
-            Atom(a) => arg.push(*a),
-            Quoted(q) => arg.extend(q.iter().copied()),
+            FlattenedTokenKind::Atom(a) => arg.push(*a),
+            FlattenedTokenKind::SingleQuoted(SingleQuoted(q))
+            | FlattenedTokenKind::DoubleQuoted(DoubleQuoted(q)) => arg.extend(q.iter().copied()),
             e => panic!("internal error: invalid token kind `{:?}` is in args", e),
         }
     }

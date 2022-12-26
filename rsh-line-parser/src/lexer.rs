@@ -96,20 +96,22 @@ impl<'a> Lexer<'a> {
             return Ok(TokenBase::new(span, TokenKindBase::ArgDelim));
         };
 
-        macro_rules! into {
-            ($e:expr) => {
-                $e.map(|v| v.map(Into::into))
-            };
-        }
-
         match self.peek_rest() {
             [] => panic!("internal error: no token found"),
-            [ESCAPE_CHAR, ..] => into!(self.next_escaped_sequence()),
-            ['\'', ..] => into!(self.next_single_quoted()),
-            ['"', ..] => into!(self.next_double_quoted()),
-            ['>' | '<', ..] | ['1' | '2', '>', ..] => into!(self.next_redirect()),
-            ['|' | ';', ..] => into!(self.next_delim()),
-            _ => into!(A::tokenize_atom(self)),
+            [ESCAPE_CHAR, ..] => self
+                .next_escaped_sequence()
+                .map(|v| v.map(|ch| TokenKindBase::Atom(A::from(ch)))),
+            ['\'', ..] => self
+                .next_single_quoted()
+                .map(|v| v.map(|q| TokenKindBase::SingleQuoted(q))),
+            ['"', ..] => self
+                .next_double_quoted()
+                .map(|v| v.map(|q| TokenKindBase::DoubleQuoted(q))),
+            ['>' | '<', ..] | ['1' | '2', '>', ..] => self
+                .next_redirect()
+                .map(|v| v.map(|r| TokenKindBase::Redirect(r))),
+            ['|' | ';', ..] => self.next_delim(),
+            _ => A::tokenize_atom(self).map(|v| v.map(|a| TokenKindBase::Atom(a))),
         }
     }
 
@@ -151,7 +153,8 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        self.next_char().map(|tok| tok.map(Into::into))
+        self.next_char()
+            .map(|tok| tok.map(|ch| TokenKindBase::Atom(A::from(ch))))
     }
 
     fn next_single_quoted(&mut self) -> Result<Spanned<SingleQuoted>> {
@@ -190,7 +193,7 @@ impl<'a> Lexer<'a> {
                     });
                 }
                 _ => {
-                    let atom = self.next_atom()?;
+                    let atom = A::tokenize_atom(self)?;
                     span = span.merged(atom.span);
                     atoms.push(atom.data);
                 }
@@ -422,11 +425,9 @@ impl AtomTokenizable for AtomKind {
         match lexer.peek_rest() {
             ['$', '(', ..] => lexer
                 .next_substitution()
-                .map(|v| v.map(|st| AtomKind::Substitution(st))),
-            ['$', ..] => lexer
-                .next_envvar()
-                .map(|v| v.map(|env| AtomKind::EnvVar(env))),
-            _ => lexer.next_char().map(|v| v.map(|ch| AtomKind::Char(ch))),
+                .map(|v| v.map(AtomKind::Substitution)),
+            ['$', ..] => lexer.next_envvar().map(|v| v.map(AtomKind::EnvVar)),
+            _ => lexer.next_char().map(|v| v.map(AtomKind::Char)),
         }
     }
 }
@@ -544,13 +545,13 @@ mod tests {
 
     macro_rules! atom {
         (st $st:expr) => {
-            AtomKind::from(Substitution::from(&$st[..]))
+            AtomKind::Substitution(Substitution($st.to_vec()))
         };
         (env $env:expr) => {
-            AtomKind::from(EnvVar::from(&*$env))
+            AtomKind::EnvVar(EnvVar($env.to_string()))
         };
         ($atom:expr) => {
-            AtomKind::from($atom)
+            AtomKind::Char($atom)
         };
     }
 
@@ -563,13 +564,13 @@ mod tests {
         };
         ($range:expr, squote $squote:expr) => {
             Token {
-                data: SingleQuoted::from(&*$squote).into(),
+                data: SingleQuoted($squote.chars().collect()).into(),
                 span: $range.into(),
             }
         };
         ($range:expr, dquote $dquote:expr) => {
             Token {
-                data: DoubleQuoted::from(&$dquote[..]).into(),
+                data: DoubleQuoted($dquote.to_vec()).into(),
                 span: $range.into(),
             }
         };
