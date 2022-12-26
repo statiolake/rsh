@@ -438,8 +438,12 @@ impl AtomTokenizable for char {
     }
 }
 
-fn kind_at<A>(tokens: &[TokenBase<A>], idx: usize) -> Option<&TokenKindBase<A>> {
-    tokens.get(idx).map(|t| &t.data)
+fn kind_at<A>(tokens: &[TokenBase<A>], idx: i32) -> Option<&TokenKindBase<A>> {
+    if idx < 0 {
+        None
+    } else {
+        tokens.get(idx as usize).map(|t| &t.data)
+    }
 }
 
 fn normalize_tokens<A>(tokens: &mut Vec<TokenBase<A>>) {
@@ -455,14 +459,14 @@ fn remove_surrounding_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
 
     // Remove leading delimiters
     let first_non_delim = tokens.iter().position(is_non_delim).unwrap_or(tokens.len());
-    tokens.drain(..first_non_delim);
+    tokens.drain(..first_non_delim.min(tokens.len()));
 
     // Remove trailing delimiters
     let last_non_delim = tokens
         .iter()
         .rposition(is_non_delim)
         .unwrap_or(tokens.len());
-    tokens.drain((last_non_delim + 1)..);
+    tokens.drain((last_non_delim + 1).min(tokens.len())..);
 }
 
 fn remove_duplicated_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
@@ -473,7 +477,7 @@ fn remove_duplicated_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
     let mut idx = 1;
     while idx < tokens.len() {
         if matches!(
-            join(kind_at(tokens, idx), kind_at(tokens, idx - 1)),
+            join(kind_at(tokens, idx as i32), kind_at(tokens, idx as i32 - 1)),
             Some(
                 (TokenKindBase::ArgDelim, TokenKindBase::ArgDelim)
                     | (TokenKindBase::Delim, TokenKindBase::Delim)
@@ -491,13 +495,19 @@ fn remove_arg_delim_around_delim_or_pipe<A>(tokens: &mut Vec<TokenBase<A>>) {
     let mut idx = 0;
     while idx < tokens.len() {
         if matches!(tokens[idx].data, TokenKindBase::Delim | TokenKindBase::Pipe) {
-            if matches!(kind_at(tokens, idx - 1), Some(TokenKindBase::ArgDelim)) {
+            if matches!(
+                kind_at(tokens, idx as i32 - 1),
+                Some(TokenKindBase::ArgDelim)
+            ) {
                 // Remove ArgDelim before Delim.
                 tokens.remove(idx - 1);
                 idx -= 1;
             }
 
-            if matches!(kind_at(tokens, idx + 1), Some(TokenKindBase::ArgDelim)) {
+            if matches!(
+                kind_at(tokens, idx as i32 + 1),
+                Some(TokenKindBase::ArgDelim)
+            ) {
                 // Remove ArgDelim after Delim.
                 tokens.remove(idx + 1);
             }
@@ -515,7 +525,10 @@ fn normalize_arg_delim_around_redirect<A>(tokens: &mut Vec<TokenBase<A>>) {
             // If current token is redirect,
             // 1. ensure token before redirect is ArgDelim,
             // 2. remove ArgDelim after redirect if exists.
-            if !matches!(kind_at(tokens, idx - 1), Some(TokenKindBase::ArgDelim)) {
+            if !matches!(
+                kind_at(tokens, idx as i32 - 1),
+                Some(TokenKindBase::ArgDelim)
+            ) {
                 let span = Span::from(tokens[idx - 1].span.end..tokens[idx].span.start);
                 tokens.insert(
                     idx,
@@ -527,7 +540,10 @@ fn normalize_arg_delim_around_redirect<A>(tokens: &mut Vec<TokenBase<A>>) {
                 idx += 1;
             }
 
-            if matches!(kind_at(tokens, idx + 1), Some(TokenKindBase::ArgDelim)) {
+            if matches!(
+                kind_at(tokens, idx as i32 + 1),
+                Some(TokenKindBase::ArgDelim)
+            ) {
                 tokens.remove(idx + 1);
             }
         }

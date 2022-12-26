@@ -62,6 +62,10 @@ impl Shell {
         let cmdline = self.read_line()?;
         let tokens = Lexer::new(&cmdline.chars().collect_vec()).tokenize()?;
 
+        if tokens.is_empty() {
+            return Ok(());
+        }
+
         let _keeper = ConsoleModeKeeper::new()?;
         self.state.run(tokens)
     }
