@@ -193,3 +193,12 @@ impl From<(RedirectKind, RedirectReferenceKind)> for Redirect {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FlattenedTokenKind {
+    Atom(char),
+    SingleQuoted(Vec<char>),
+    DoubleQuoted(Vec<char>),
+    ArgDelim,
+    Redirect(Redirect),
+}
