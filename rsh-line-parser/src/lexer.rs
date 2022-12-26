@@ -534,8 +534,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     macro_rules! atom {
-        (ss $ss:expr) => {
-            AtomKind::from(Substitution::from(&$ss[..]))
+        (st $st:expr) => {
+            AtomKind::from(Substitution::from(&$st[..]))
         };
         (env $env:expr) => {
             AtomKind::from(EnvVar::from(&*$env))
@@ -579,6 +579,12 @@ mod tests {
         ($range:expr, pipe) => {
             Token {
                 data: TokenKind::Pipe,
+                span: $range.into(),
+            }
+        };
+        ($range:expr, delim) => {
+            Token {
+                data: TokenKind::Delim,
                 span: $range.into(),
             }
         };
@@ -683,7 +689,7 @@ mod tests {
             tok!(2..3, atom 'h'),
             tok!(3..4, atom 'o'),
             tok!(4..5, argd),
-            tok!(5..10, atom ss [
+            tok!(5..10, atom st [
                 tok!(7..8, atom 'l'),
                 tok!(8..9, atom 's'),
             ]),
@@ -704,7 +710,7 @@ mod tests {
             tok!(2..3, atom 'h'),
             tok!(3..4, atom 'o'),
             tok!(4..5, argd),
-            tok!(5..14, atom ss [
+            tok!(5..14, atom st [
                 tok!(7..8, atom 'l'),
                 tok!(8..9, atom 's'),
                 tok!(9..10, argd),
@@ -729,11 +735,11 @@ mod tests {
             tok!(2..3, atom 'h'),
             tok!(3..4, atom 'o'),
             tok!(4..5, argd),
-            tok!(5..16, atom ss [
+            tok!(5..16, atom st [
                 tok!(7..8, atom 'l'),
                 tok!(8..9, atom 's'),
                 tok!(9..10, argd),
-                tok!(10..15, atom ss [
+                tok!(10..15, atom st [
                     tok!(12..13, atom 'l'),
                     tok!(13..14, atom 's'),
                 ]),
@@ -884,6 +890,38 @@ mod tests {
             tok!(23..24, atom 't'),
             tok!(24..25, atom 'x'),
             tok!(25..26, atom 't'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn delim() {
+        let tokens = tokenize_str("ls; wc -l");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, delim),
+            tok!(4..5, atom 'w'),
+            tok!(5..6, atom 'c'),
+            tok!(6..7, argd),
+            tok!(7..8, atom '-'),
+            tok!(8..9, atom 'l'),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn pipe() {
+        let tokens = tokenize_str("ls | wc -l");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(3..4, pipe),
+            tok!(5..6, atom 'w'),
+            tok!(6..7, atom 'c'),
+            tok!(7..8, argd),
+            tok!(8..9, atom '-'),
+            tok!(9..10, atom 'l'),
         ];
         assert_eq!(tokens, expected);
     }
