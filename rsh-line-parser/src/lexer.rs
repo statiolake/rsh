@@ -2,7 +2,7 @@ use crate::{
     span::{Span, Spanned},
     token::{
         AtomKind, DoubleQuoted, EnvVar, Redirect, RedirectKind, RedirectReferenceKind,
-        SingleQuoted, SubShell, Token, TokenKind,
+        SingleQuoted, Substitution, Token, TokenKind,
     },
 };
 
@@ -30,11 +30,11 @@ pub enum Error {
     #[error("invalid escape sequence '{}{}'", ESCAPE_CHAR, ch)]
     InvalidEscapeSequence { span: Span, ch: char },
 
-    #[error("no environment variable or subshell invocation")]
-    NoEnvVarOrSubShell { span: Span },
+    #[error("no environment variable or substitution invocation")]
+    NoEnvVarOrSubstitution { span: Span },
 
-    #[error("subshell invocation is not ended")]
-    UnbalancedSubShell { span: Span },
+    #[error("substitution invocation is not ended")]
+    UnbalancedSubstitution { span: Span },
 
     #[error("environment variable is not ended")]
     UnbalancedEnvVarBrace { span: Span },
@@ -48,8 +48,8 @@ impl Error {
         match self {
             Error::NoEscapedChar { span } => *span,
             Error::InvalidEscapeSequence { span, .. } => *span,
-            Error::NoEnvVarOrSubShell { span } => *span,
-            Error::UnbalancedSubShell { span } => *span,
+            Error::NoEnvVarOrSubstitution { span } => *span,
+            Error::UnbalancedSubstitution { span } => *span,
             Error::UnbalancedEnvVarBrace { span } => *span,
             Error::UnbalancedQuotedString { span } => *span,
         }
@@ -62,7 +62,7 @@ pub struct Lexer<'a> {
     source: &'a [char],
     current: usize,
 
-    subshell_level: usize,
+    substitution_level: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -70,7 +70,7 @@ impl<'a> Lexer<'a> {
         Self {
             source,
             current: 0,
-            subshell_level: 0,
+            substitution_level: 0,
         }
     }
 
@@ -78,8 +78,8 @@ impl<'a> Lexer<'a> {
         let mut tokens: Vec<Token> = Vec::new();
 
         while let Some(ch) = self.peek() {
-            if self.subshell_level > 0 && ch == ')' {
-                // If tokenize in subshell, stop tokenizing at ')'.
+            if self.substitution_level > 0 && ch == ')' {
+                // If tokenize in substitution, stop tokenizing at ')'.
                 break;
             }
 
@@ -162,14 +162,14 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Tokenize as if it is quoted. Usually called when tokenizing subshell invocation inside the
+    /// Tokenize as if it is quoted. Usually called when tokenizing substitution invocation inside the
     /// double quote.
     ///
     /// ## Note
     ///
     /// In this mode, everything is treated as simple string (except for whitespace; when `delim` is
     /// `true`, whitespaces are treated as ArgDelim, otherwise just a whitespace character.) For
-    /// example, environmental variables substitution or subshell invocation won't be parsed.
+    /// example, environmental variables substitution or substitution invocation won't be parsed.
     ///
     /// ## Examples
     ///
@@ -178,7 +178,7 @@ impl<'a> Lexer<'a> {
     /// $(ls)
     /// ```
     ///
-    /// At first lowering the command line text will be `echo $(ls)`, but it's not subshell
+    /// At first lowering the command line text will be `echo $(ls)`, but it's not substitution
     /// invocation here. Much like `echo '$(ls)'`.
     pub fn partial_tokenize(&mut self, delim: bool) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
@@ -365,23 +365,23 @@ impl<'a> Lexer<'a> {
         Ok(Spanned { data: word, span })
     }
 
-    fn next_subshell(&mut self) -> Result<Spanned<SubShell>> {
+    fn next_substitution(&mut self) -> Result<Spanned<Substitution>> {
         let mut span = self.eat(['$', '(']);
-        self.subshell_level += 1;
+        self.substitution_level += 1;
 
         let tokens = self.tokenize()?;
         for token in &tokens {
             span = span.merged(token.span);
         }
         if self.peek() != Some(')') {
-            return Err(Error::UnbalancedSubShell { span });
+            return Err(Error::UnbalancedSubstitution { span });
         }
         span = span.merged(self.eat([')']));
 
-        self.subshell_level -= 1;
+        self.substitution_level -= 1;
 
         Ok(Spanned {
-            data: SubShell(tokens),
+            data: Substitution(tokens),
             span,
         })
     }
@@ -421,7 +421,7 @@ impl<'a> Lexer<'a> {
             };
         }
         match self.peek_rest() {
-            ['$', '(', ..] => into!(self.next_subshell()),
+            ['$', '(', ..] => into!(self.next_substitution()),
             ['$', ..] => into!(self.next_envvar()),
             _ => into!(self.next_char()),
         }
@@ -575,7 +575,7 @@ mod tests {
 
     macro_rules! atom {
         (ss $ss:expr) => {
-            AtomKind::from(SubShell::from(&$ss[..]))
+            AtomKind::from(Substitution::from(&$ss[..]))
         };
         (env $env:expr) => {
             AtomKind::from(EnvVar::from(&*$env))
@@ -715,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn subshell() {
+    fn substitution() {
         let tokens = tokenize_str("echo $(ls) def");
         let expected = [
             tok!(0..1, atom 'e'),
@@ -736,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn subshell_args() {
+    fn substitution_args() {
         let tokens = tokenize_str("echo $(ls -al) def");
         let expected = [
             tok!(0..1, atom 'e'),
@@ -761,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn subsubshell() {
+    fn subsubstitution() {
         let tokens = tokenize_str("echo $(ls $(ls)) def");
         let expected = [
             tok!(0..1, atom 'e'),

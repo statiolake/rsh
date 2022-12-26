@@ -91,7 +91,7 @@ pub enum AtomKind {
     EnvVar(EnvVar),
 
     /// Sub shell invocation.
-    SubShell(SubShell),
+    Substitution(Substitution),
 }
 impl From<AtomKind> for TokenKind {
     fn from(v: AtomKind) -> Self {
@@ -130,18 +130,18 @@ impl From<&str> for EnvVar {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct SubShell(pub Vec<Token>);
-impl From<SubShell> for TokenKind {
-    fn from(v: SubShell) -> Self {
-        Self::Atom(AtomKind::SubShell(v))
+pub struct Substitution(pub Vec<Token>);
+impl From<Substitution> for TokenKind {
+    fn from(v: Substitution) -> Self {
+        Self::Atom(AtomKind::Substitution(v))
     }
 }
-impl From<SubShell> for AtomKind {
-    fn from(v: SubShell) -> Self {
-        Self::SubShell(v)
+impl From<Substitution> for AtomKind {
+    fn from(v: Substitution) -> Self {
+        Self::Substitution(v)
     }
 }
-impl From<&[Token]> for SubShell {
+impl From<&[Token]> for Substitution {
     fn from(v: &[Token]) -> Self {
         Self(v.to_vec())
     }
