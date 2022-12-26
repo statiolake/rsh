@@ -102,9 +102,6 @@ pub fn parse_piped_command(
     })
 }
 
-/// ## Note
-///
-/// Tokens must be flattened.
 pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Result<Command> {
     use crate::token::{RedirectKind as RK, RedirectReferenceKind as RRK};
 
@@ -157,7 +154,7 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
     Ok(Command { args, iospec })
 }
 
-pub fn toks_to_string(toks: &[FlattenedToken]) -> String {
+fn toks_to_string(toks: &[FlattenedToken]) -> String {
     use FlattenedTokenKind::*;
 
     let mut arg = String::new();
@@ -170,68 +167,3 @@ pub fn toks_to_string(toks: &[FlattenedToken]) -> String {
     }
     arg
 }
-
-// pub struct Parser<'a> {
-//     tokens: &'a [FlattenedToken],
-//     current: usize,
-// }
-//
-// impl<'a> Parser<'a> {
-//     pub fn new(tokens: &'a [FlattenedToken]) -> Self {
-//         Self { tokens, current: 0 }
-//     }
-//
-//     pub fn parse(&mut self) -> Result<CommandLine<'a>> {
-//         let mut commands = Vec::new();
-//         while self.peek().is_some() {
-//             commands.push(self.next_piped_command()?);
-//         }
-//
-//         Ok(CommandLine {
-//             piped_commands: commands,
-//         })
-//     }
-//
-//     fn next_piped_command(&mut self) -> Result<PipedCommand<'a>> {
-//         // TODO
-//     }
-//
-//     fn next_command(&mut self, default_iospec: IOSpec<'a>) -> Result<Command<'a>> {
-//         use crate::lexer::{RedirectKind as RK, RedirectReferenceKind as RRK};
-//
-//         // Skip leading ArgDelims.
-//         while let Some(tok) = self.peek() {
-//             if !matches!(tok.data, FlattenedTokenKind::ArgDelim) {
-//                 break;
-//             }
-//         }
-//
-//         let mut args = vec![];
-//         let mut iospec = default_iospec;
-//         while let Some(tok) = self.peek() {
-//             match &tok.data {
-//                 FlattenedTokenKind::Delim => break,
-//                 FlattenedTokenKind::Redirect(redir) => todo!(),
-//                 FlattenedTokenKind::Pipe => todo!(),
-//                 FlattenedTokenKind::Atom(_) => todo!(),
-//                 FlattenedTokenKind::SingleQuoted(_) => todo!(),
-//                 FlattenedTokenKind::DoubleQuoted(_) => todo!(),
-//                 FlattenedTokenKind::ArgDelim => todo!(),
-//             }
-//         }
-//
-//         Ok(Command { args, iospec })
-//     }
-//
-//     fn peek(&self) -> Option<&'a FlattenedToken> {
-//         self.lookahead(0)
-//     }
-//
-//     fn lookahead(&self, n: usize) -> Option<&'a FlattenedToken> {
-//         self.peek_rest().get(n)
-//     }
-//
-//     fn peek_rest(&self) -> &'a [FlattenedToken] {
-//         &self.tokens[self.current..]
-//     }
-// }

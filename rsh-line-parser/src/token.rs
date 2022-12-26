@@ -190,3 +190,38 @@ pub enum FlattenedTokenKind {
     Pipe,
     Delim,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("{} is not a flat token kind", 0)]
+pub struct NotFlatTokenError(TokenKind);
+
+impl TryFrom<TokenKind> for FlattenedTokenKind {
+    type Error = NotFlatTokenError;
+
+    fn try_from(value: TokenKind) -> Result<Self, Self::Error> {
+        fn atom_to_char(atom: AtomKind) -> Result<char, NotFlatTokenError> {
+            match atom {
+                AtomKind::Char(ch) => Ok(ch),
+                _ => Err(NotFlatTokenError(TokenKind::Atom(atom))),
+            }
+        }
+
+        match value {
+            TokenKind::Atom(atom) => Ok(FlattenedTokenKind::Atom(atom_to_char(atom)?)),
+            TokenKind::SingleQuoted(single_quoted) => {
+                Ok(FlattenedTokenKind::Quoted(single_quoted.0))
+            }
+            TokenKind::DoubleQuoted(double_quoted) => Ok(FlattenedTokenKind::Quoted(
+                double_quoted
+                    .0
+                    .into_iter()
+                    .map(atom_to_char)
+                    .collect::<Result<_, _>>()?,
+            )),
+            TokenKind::ArgDelim => Ok(FlattenedTokenKind::ArgDelim),
+            TokenKind::Redirect(redir) => Ok(FlattenedTokenKind::Redirect(redir)),
+            TokenKind::Pipe => Ok(FlattenedTokenKind::Pipe),
+            TokenKind::Delim => Ok(FlattenedTokenKind::Delim),
+        }
+    }
+}
