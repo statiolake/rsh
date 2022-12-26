@@ -103,7 +103,7 @@ impl Args {
                     .map(|atom| match atom {
                         ArgAtom::Delim => unreachable!("found delimiter after splitting"),
                         ArgAtom::Char(ch) => ch.to_string(),
-                        ArgAtom::Var(name) => state.var(name).unwrap_or_else(String::new),
+                        ArgAtom::Var(name) => state.var(name).unwrap_or_default(),
                         ArgAtom::Cmd(_) => panic!("to_vec() called on unflattened args"),
                     })
                     .collect()

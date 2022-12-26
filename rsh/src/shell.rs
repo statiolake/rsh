@@ -432,7 +432,7 @@ impl ShellState {
         args: &[String],
     ) -> Result<()> {
         ensure!(args.len() == 1, "cd: requires exact one argument");
-        env::set_current_dir(&args[0].to_string())?;
+        env::set_current_dir(&args[0])?;
         Ok(())
     }
 

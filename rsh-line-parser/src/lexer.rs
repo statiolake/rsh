@@ -41,6 +41,20 @@ pub enum TokenKind {
     Delim,
 }
 
+impl TokenKind {
+    pub fn is_delim(&self) -> bool {
+        matches!(self, TokenKind::Delim)
+    }
+
+    pub fn is_arg_delim(&self) -> bool {
+        matches!(self, TokenKind::ArgDelim)
+    }
+
+    pub fn is_some_delim(&self) -> bool {
+        self.is_delim() || self.is_arg_delim()
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SingleQuoted(pub Vec<char>);
 impl From<SingleQuoted> for TokenKind {
@@ -171,6 +185,7 @@ pub struct Redirect {
     pub kind: RedirectKind,
     pub reference: Option<RedirectReferenceKind>,
 }
+
 impl From<Redirect> for TokenKind {
     fn from(v: Redirect) -> Self {
         Self::Redirect(v)
@@ -248,7 +263,7 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>> {
-        let mut tokens = Vec::new();
+        let mut tokens: Vec<Token> = Vec::new();
 
         while let Some(ch) = self.peek() {
             if self.subshell_level > 0 && ch == ')' {
@@ -256,8 +271,56 @@ impl<'a> Lexer<'a> {
                 break;
             }
 
-            tokens.push(self.next_token()?);
+            // Adjust ArgDelim for redirect or Delim.
+            // - Insert ArgDelim before redirect and remove after redirect.
+            //   - Removing after redirect should done only when the redirect is not a reference.
+            // - Remove ArgDelim before and after Delim.
+            let token = self.next_token()?;
+
+            // For redirect
+            if matches!(token.data, TokenKind::Redirect(_))
+                && !matches!(tokens.last().map(|t| &t.data), Some(TokenKind::ArgDelim))
+            {
+                // Insert ArgDelim before Redirect
+                tokens.push(Token {
+                    data: TokenKind::ArgDelim,
+                    span: Span::from(token.span.start..token.span.start),
+                });
+            }
+
+            if matches!(token.data, TokenKind::ArgDelim)
+                && matches!(
+                    tokens.last().map(|t| &t.data),
+                    Some(TokenKind::Redirect(Redirect {
+                        reference: None,
+                        ..
+                    }))
+                )
+            {
+                // Skip ArgDelim after Redirect
+                continue;
+            }
+
+            // For Delim
+            if matches!(token.data, TokenKind::Delim)
+                && matches!(tokens.last().map(|t| &t.data), Some(TokenKind::ArgDelim))
+            {
+                // Remove ArgDelim before Delim
+                tokens.pop();
+                continue;
+            }
+
+            if matches!(token.data, TokenKind::ArgDelim)
+                && matches!(tokens.last().map(|t| &t.data), Some(TokenKind::Delim))
+            {
+                // Remove ArgDelim after Delim
+                continue;
+            }
+
+            tokens.push(token);
         }
+
+        normalize_tokens(&mut tokens);
 
         Ok(tokens)
     }
@@ -596,11 +659,99 @@ impl<'a> Lexer<'a> {
     }
 
     fn lookahead(&self, n: usize) -> Option<char> {
-        self.source.get(self.current + n).copied()
+        self.peek_rest().get(n).copied()
     }
 
     fn peek_rest(&self) -> &[char] {
         &self.source[self.current..]
+    }
+}
+
+fn normalize_tokens(tokens: &mut Vec<Token>) {
+    remove_surrounding_arg_delim_or_delim(tokens);
+    remove_duplicated_arg_delim_or_delim(tokens);
+    remove_arg_delim_around_delim(tokens);
+    normalize_arg_delim_around_redirect(tokens);
+}
+
+fn remove_surrounding_arg_delim_or_delim(tokens: &mut Vec<Token>) {
+    let is_non_delim = |tok: &Token| !tok.data.is_some_delim();
+
+    // Remove leading delimiters
+    let first_non_delim = tokens.iter().position(is_non_delim).unwrap_or(tokens.len());
+    tokens.drain(..first_non_delim);
+
+    // Remove trailing delimiters
+    let last_non_delim = tokens
+        .iter()
+        .rposition(is_non_delim)
+        .unwrap_or(tokens.len());
+    tokens.drain((last_non_delim + 1)..);
+}
+
+fn remove_duplicated_arg_delim_or_delim(tokens: &mut Vec<Token>) {
+    let mut idx = 1;
+    while idx < tokens.len() {
+        if tokens[idx].data.is_arg_delim() && tokens[idx - 1].data.is_arg_delim()
+            || tokens[idx].data.is_delim() && tokens[idx - 1].data.is_delim()
+        {
+            tokens.remove(idx);
+            idx -= 1;
+        }
+
+        idx += 1;
+    }
+}
+
+fn remove_arg_delim_around_delim(tokens: &mut Vec<Token>) {
+    let mut idx = 0;
+    while idx < tokens.len() {
+        if tokens[idx].data.is_delim() {
+            if idx > 0 && tokens[idx - 1].data.is_arg_delim() {
+                // Remove ArgDelim before Delim.
+                tokens.remove(idx - 1);
+                idx -= 1;
+            }
+
+            if idx + 1 < tokens.len() && tokens[idx + 1].data.is_arg_delim() {
+                // Remove ArgDelim after Delim.
+                tokens.remove(idx + 1);
+            }
+        }
+
+        idx += 1;
+    }
+}
+
+fn normalize_arg_delim_around_redirect(tokens: &mut Vec<Token>) {
+    let mut idx = 0;
+
+    while idx < tokens.len() {
+        if matches!(tokens[idx].data, TokenKind::Redirect(_)) {
+            // If current token is redirect,
+            // 1. ensure token before redirect is ArgDelim,
+            // 2. remove ArgDelim after redirect if exists.
+            if idx > 0 && !tokens[idx - 1].data.is_arg_delim() {
+                let span = Span {
+                    start: tokens[idx - 1].span.end,
+                    end: tokens[idx].span.start,
+                };
+                tokens.insert(
+                    idx - 1,
+                    Spanned {
+                        span,
+                        data: TokenKind::ArgDelim,
+                    },
+                );
+                idx += 1;
+            }
+
+            if idx + 1 < tokens.len() && tokens[idx + 1].data.is_arg_delim() {
+                tokens.remove(idx + 1);
+            }
+        }
+
+        idx += 1;
     }
 }
 
@@ -898,7 +1049,6 @@ mod tests {
             tok!(1..2, atom 's'),
             tok!(2..3, argd),
             tok!(3..4, redir RK::Stdout),
-            tok!(4..5, argd),
             tok!(5..6, atom 'f'),
             tok!(6..7, atom 'i'),
             tok!(7..8, atom 'l'),
@@ -921,7 +1071,6 @@ mod tests {
             tok!(1..2, atom 's'),
             tok!(2..3, argd),
             tok!(3..4, redir RK::Stdout),
-            tok!(4..5, argd),
             tok!(5..6, atom 'f'),
             tok!(6..7, atom 'i'),
             tok!(7..8, atom 'l'),
@@ -932,6 +1081,37 @@ mod tests {
             tok!(12..13, atom 't'),
             tok!(13..14, argd),
             tok!(14..18, redir(RK::Stderr, RRK::Stdout)),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn redirect_normalize() {
+        use RedirectKind as RK;
+        let tokens = tokenize_str("ls >file.txt>     file.txt");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, redir RK::Stdout),
+            tok!(4..5, atom 'f'),
+            tok!(5..6, atom 'i'),
+            tok!(6..7, atom 'l'),
+            tok!(7..8, atom 'e'),
+            tok!(8..9, atom '.'),
+            tok!(9..10, atom 't'),
+            tok!(10..11, atom 'x'),
+            tok!(11..12, atom 't'),
+            tok!(12..12, argd),
+            tok!(12..13, redir RK::Stdout),
+            tok!(18..19, atom 'f'),
+            tok!(19..20, atom 'i'),
+            tok!(20..21, atom 'l'),
+            tok!(21..22, atom 'e'),
+            tok!(22..23, atom '.'),
+            tok!(23..24, atom 't'),
+            tok!(24..25, atom 'x'),
+            tok!(25..26, atom 't'),
         ];
         assert_eq!(tokens, expected);
     }
