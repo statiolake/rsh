@@ -28,20 +28,6 @@ pub enum TokenKind {
     Delim,
 }
 
-impl TokenKind {
-    pub fn is_delim(&self) -> bool {
-        matches!(self, TokenKind::Delim)
-    }
-
-    pub fn is_arg_delim(&self) -> bool {
-        matches!(self, TokenKind::ArgDelim)
-    }
-
-    pub fn is_some_delim(&self) -> bool {
-        self.is_delim() || self.is_arg_delim()
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SingleQuoted(pub Vec<char>);
 impl From<SingleQuoted> for TokenKind {
