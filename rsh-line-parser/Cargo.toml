@@ -1,13 +1,16 @@
 [package]
-name = "rsh-line-editor"
+name = "rsh-line-parser"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.48"
-crossterm = "0.22.1"
 itertools = "0.10.3"
+paste = "1.0.7"
 thiserror = "1.0.30"
-unicode-width = "0.1.9"
+
+[dev-dependencies]
+pretty_assertions = "1.2.1"
+
+[features]
