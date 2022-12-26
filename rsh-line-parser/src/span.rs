@@ -36,6 +36,10 @@ pub struct Spanned<T> {
 }
 
 impl<T> Spanned<T> {
+    pub fn new(span: Span, data: T) -> Self {
+        Self { span, data }
+    }
+
     pub fn map<F, U>(self, f: F) -> Spanned<U>
     where
         F: FnOnce(T) -> U,

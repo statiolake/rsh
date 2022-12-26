@@ -7,12 +7,6 @@ pub type Token = TokenBase<AtomKind>;
 pub type FlattenedTokenKind = TokenKindBase<char>;
 pub type FlattenedToken = TokenBase<char>;
 
-impl<A> TokenBase<A> {
-    pub fn new(span: Span, data: TokenKindBase<A>) -> Self {
-        Self { span, data }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TokenKindBase<A> {
     /// Normal atom.
@@ -145,6 +139,7 @@ impl RedirectKind {
 pub struct Redirect {
     pub kind: RedirectKind,
     pub reference: Option<RedirectReferenceKind>,
+    pub append: bool,
 }
 
 impl<A> From<Redirect> for TokenKindBase<A> {
@@ -158,6 +153,7 @@ impl From<RedirectKind> for Redirect {
         Self {
             kind,
             reference: None,
+            append: false,
         }
     }
 }
@@ -167,6 +163,7 @@ impl From<(RedirectKind, RedirectReferenceKind)> for Redirect {
         Self {
             kind,
             reference: Some(reference),
+            append: false,
         }
     }
 }

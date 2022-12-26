@@ -52,7 +52,7 @@ pub enum StdoutDestination {
     InheritStdout,
     InheritStderr,
     PipeToNext,
-    File(PathBuf),
+    File { path: PathBuf, append: bool },
     Capture,
 }
 
@@ -61,7 +61,7 @@ pub enum StderrDestination {
     InheritStdout,
     InheritStderr,
     PipeToNext,
-    File(PathBuf),
+    File { path: PathBuf, append: bool },
     Capture,
 }
 
@@ -129,7 +129,10 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
                             StderrDestination::InheritStdout => StdoutDestination::InheritStdout,
                             StderrDestination::InheritStderr => StdoutDestination::InheritStderr,
                             StderrDestination::PipeToNext => StdoutDestination::PipeToNext,
-                            StderrDestination::File(path) => StdoutDestination::File(path.clone()),
+                            StderrDestination::File { path, append } => StdoutDestination::File {
+                                path: path.clone(),
+                                append: *append,
+                            },
                             StderrDestination::Capture => StdoutDestination::Capture,
                         }
                     }
@@ -138,7 +141,10 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
                             StdoutDestination::InheritStderr => StderrDestination::InheritStderr,
                             StdoutDestination::InheritStdout => StderrDestination::InheritStdout,
                             StdoutDestination::PipeToNext => StderrDestination::PipeToNext,
-                            StdoutDestination::File(path) => StderrDestination::File(path.clone()),
+                            StdoutDestination::File { path, append } => StderrDestination::File {
+                                path: path.clone(),
+                                append: *append,
+                            },
                             StdoutDestination::Capture => StderrDestination::Capture,
                         }
                     }
@@ -148,8 +154,18 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
                 let path = toks_to_string(&arg_toks[1..]);
                 match redir.kind {
                     RK::Stdin => iospec.stdin = StdinSource::File(PathBuf::from(path)),
-                    RK::Stdout => iospec.stdout = StdoutDestination::File(PathBuf::from(path)),
-                    RK::Stderr => iospec.stderr = StderrDestination::File(PathBuf::from(path)),
+                    RK::Stdout => {
+                        iospec.stdout = StdoutDestination::File {
+                            path: PathBuf::from(path),
+                            append: redir.append,
+                        }
+                    }
+                    RK::Stderr => {
+                        iospec.stderr = StderrDestination::File {
+                            path: PathBuf::from(path),
+                            append: redir.append,
+                        }
+                    }
                 }
             }
         } else {

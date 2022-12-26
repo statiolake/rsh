@@ -167,10 +167,7 @@ impl<'a> Lexer<'a> {
             match ch {
                 '\'' => {
                     span = span.merged(self.eat([ch]));
-                    return Ok(Spanned {
-                        data: SingleQuoted(chars),
-                        span,
-                    });
+                    return Ok(Spanned::new(span, SingleQuoted(chars)));
                 }
                 _ => {
                     let ch = self.next_char()?;
@@ -190,10 +187,7 @@ impl<'a> Lexer<'a> {
             match ch {
                 '"' => {
                     span = span.merged(self.eat([ch]));
-                    return Ok(Spanned {
-                        data: DoubleQuoted(atoms),
-                        span,
-                    });
+                    return Ok(Spanned::new(span, DoubleQuoted(atoms)));
                 }
                 _ => {
                     let atom = A::tokenize_atom(self)?;
@@ -208,22 +202,35 @@ impl<'a> Lexer<'a> {
 
     fn next_redirect(&mut self) -> Result<Spanned<Redirect>> {
         let mut span = self.span_for_current_point();
-        let kind = match self.peek_rest() {
+
+        let (append, kind) = match self.peek_rest() {
+            ['>', '>', ..] => {
+                span = span.merged(self.eat(['>', '>']));
+                (true, RedirectKind::Stdout)
+            }
             ['>', ..] => {
                 span = span.merged(self.eat(['>']));
-                RedirectKind::Stdout
+                (false, RedirectKind::Stdout)
             }
             ['<', ..] => {
                 span = span.merged(self.eat(['<']));
-                RedirectKind::Stdin
+                (false, RedirectKind::Stdin)
+            }
+            ['1', '>', '>', ..] => {
+                span = span.merged(self.eat(['1', '>', '>']));
+                (true, RedirectKind::Stdout)
             }
             ['1', '>', ..] => {
                 span = span.merged(self.eat(['1', '>']));
-                RedirectKind::Stdout
+                (false, RedirectKind::Stdout)
+            }
+            ['2', '>', '>', ..] => {
+                span = span.merged(self.eat(['2', '>', '>']));
+                (true, RedirectKind::Stderr)
             }
             ['2', '>', ..] => {
                 span = span.merged(self.eat(['2', '>']));
-                RedirectKind::Stderr
+                (false, RedirectKind::Stderr)
             }
             _ => panic!("internal error: tried to parse non-redirect"),
         };
@@ -240,10 +247,14 @@ impl<'a> Lexer<'a> {
             _ => None,
         };
 
-        Ok(Spanned {
-            data: Redirect { kind, reference },
+        Ok(Spanned::new(
             span,
-        })
+            Redirect {
+                kind,
+                reference,
+                append,
+            },
+        ))
     }
 
     fn next_delim<A>(&mut self) -> Result<TokenBase<A>> {
@@ -271,15 +282,15 @@ impl<'a> Lexer<'a> {
         match self.lookahead(1) {
             Some(ch) if SHOULD_ESCAPE_CHAR.contains(&ch) => {
                 let span = self.eat([ESCAPE_CHAR, ch]);
-                Ok(Spanned { data: ch, span })
+                Ok(Spanned::new(span, ch))
             }
             Some('n') => {
                 let span = self.eat([ESCAPE_CHAR, 'n']);
-                Ok(Spanned { data: '\n', span })
+                Ok(Spanned::new(span, '\n'))
             }
             Some('t') => {
                 let span = self.eat([ESCAPE_CHAR, 't']);
-                Ok(Spanned { data: '\t', span })
+                Ok(Spanned::new(span, '\t'))
             }
             Some(ch) => {
                 let span = self.eat([ESCAPE_CHAR, ch]);
@@ -296,7 +307,7 @@ impl<'a> Lexer<'a> {
             Some(ESCAPE_CHAR) => self.next_escaped_sequence(),
             Some(ch) => {
                 let span = self.eat([ch]);
-                Ok(Spanned { data: ch, span })
+                Ok(Spanned::new(span, ch))
             }
             None => panic!("internal error: no next character"),
         }
@@ -313,7 +324,7 @@ impl<'a> Lexer<'a> {
             word.push(ch);
         }
 
-        Ok(Spanned { data: word, span })
+        Ok(Spanned::new(span, word))
     }
 
     fn next_substitution(&mut self) -> Result<Spanned<Substitution>> {
@@ -331,10 +342,7 @@ impl<'a> Lexer<'a> {
 
         self.substitution_level -= 1;
 
-        Ok(Spanned {
-            data: Substitution(tokens),
-            span,
-        })
+        Ok(Spanned::new(span, Substitution(tokens)))
     }
 
     fn next_envvar(&mut self) -> Result<Spanned<EnvVar>> {
@@ -359,10 +367,7 @@ impl<'a> Lexer<'a> {
             _ => panic!("internal error: envvar not starting with `$`"),
         };
 
-        Ok(Spanned {
-            data: EnvVar(varname),
-            span,
-        })
+        Ok(Spanned::new(span, EnvVar(varname)))
     }
 
     fn skip_whitespace(&mut self) -> Option<Span> {
@@ -533,13 +538,7 @@ fn normalize_arg_delim_around_redirect<A>(tokens: &mut Vec<TokenBase<A>>) {
                 Some(TokenKindBase::ArgDelim)
             ) {
                 let span = Span::from(tokens[idx - 1].span.end..tokens[idx].span.start);
-                tokens.insert(
-                    idx,
-                    Spanned {
-                        span,
-                        data: TokenKindBase::ArgDelim,
-                    },
-                );
+                tokens.insert(idx, Spanned::new(span, TokenKindBase::ArgDelim));
                 idx += 1;
             }
 

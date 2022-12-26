@@ -252,7 +252,14 @@ fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result
                 pipe_input = Some(Box::new(reader));
                 Box::new(writer)
             }
-            StdoutDestination::File(path) => Box::new(File::create(path)?),
+            StdoutDestination::File { path, append } => Box::new(
+                File::options()
+                    .write(true)
+                    .append(*append)
+                    .truncate(!*append)
+                    .create(true)
+                    .open(path)?,
+            ),
             StdoutDestination::Capture => {
                 let (reader, writer) = os_pipe::pipe()?;
                 captured_stdout = Some(Box::new(reader));
@@ -268,16 +275,26 @@ fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result
                 pipe_input = Some(Box::new(reader));
                 Box::new(writer)
             }
-            StderrDestination::File(path) => {
+            StderrDestination::File { path, append } => {
                 // stdout と同じファイルだったら特別扱いしないと上書きしてしまう
                 let stdout_iospec = &command.iospec.stdout;
                 if matches!(
                     stdout_iospec,
-                    StdoutDestination::File(stdout_path) if is_same_file(stdout_path, path)?
+                    StdoutDestination::File {
+                        path: stdout_path,
+                        ..
+                    } if is_same_file(stdout_path, path)?
                 ) {
                     stdout.try_clone()?
                 } else {
-                    Box::new(File::create(path)?)
+                    Box::new(
+                        File::options()
+                            .write(true)
+                            .append(*append)
+                            .truncate(!*append)
+                            .create(true)
+                            .open(path)?,
+                    )
                 }
             }
             StderrDestination::Capture => {
