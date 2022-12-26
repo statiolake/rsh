@@ -21,3 +21,4 @@ rsh-line-parser = { path = "../rsh-line-parser" }
 crossterm = "0.22.1"
 crossterm_winapi = "0.9.0"
 crossbeam = "0.8.1"
+same-file = "1.0.6"

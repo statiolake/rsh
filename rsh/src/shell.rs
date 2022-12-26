@@ -13,6 +13,7 @@ use rsh_line_parser::{
     span::Span,
     token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind},
 };
+use same_file::is_same_file;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::prelude::*;
@@ -243,7 +244,7 @@ fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result
             StdinSource::File(path) => Box::new(File::open(path)?),
         };
 
-        let stdout: Box<dyn WriteIntoStdio> = match command.iospec.stdout {
+        let stdout: Box<dyn WriteIntoStdio> = match &command.iospec.stdout {
             StdoutDestination::InheritStdout => Box::new(os_pipe::dup_stdout()?),
             StdoutDestination::InheritStderr => Box::new(os_pipe::dup_stderr()?),
             StdoutDestination::PipeToNext => {
@@ -259,7 +260,7 @@ fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result
             }
         };
 
-        let stderr: Box<dyn WriteIntoStdio> = match command.iospec.stderr {
+        let stderr: Box<dyn WriteIntoStdio> = match &command.iospec.stderr {
             StderrDestination::InheritStdout => Box::new(os_pipe::dup_stdout()?),
             StderrDestination::InheritStderr => Box::new(os_pipe::dup_stderr()?),
             StderrDestination::PipeToNext => {
@@ -267,7 +268,18 @@ fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result
                 pipe_input = Some(Box::new(reader));
                 Box::new(writer)
             }
-            StderrDestination::File(path) => Box::new(File::create(path)?),
+            StderrDestination::File(path) => {
+                // stdout と同じファイルだったら特別扱いしないと上書きしてしまう
+                let stdout_iospec = &command.iospec.stdout;
+                if matches!(
+                    stdout_iospec,
+                    StdoutDestination::File(stdout_path) if is_same_file(stdout_path, path)?
+                ) {
+                    stdout.try_clone()?
+                } else {
+                    Box::new(File::create(path)?)
+                }
+            }
             StderrDestination::Capture => {
                 let (reader, writer) = os_pipe::pipe()?;
                 captured_stderr = Some(Box::new(reader));
