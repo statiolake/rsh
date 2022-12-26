@@ -1,5 +1,5 @@
 [package]
-name = "rsh_line_editor"
+name = "rsh-line-editor"
 version = "0.1.0"
 edition = "2018"
 

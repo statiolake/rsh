@@ -465,10 +465,22 @@ dependencies = [
  "itertools",
  "once_cell",
  "os_pipe",
- "rsh_line_editor",
+ "rsh-line-editor",
+ "rsh-line-parser",
  "shared_child",
  "which",
  "whoami",
+]
+
+[[package]]
+name = "rsh-line-editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "itertools",
+ "thiserror",
+ "unicode-width",
 ]
 
 [[package]]
@@ -479,17 +491,6 @@ dependencies = [
  "paste",
  "pretty_assertions",
  "thiserror",
-]
-
-[[package]]
-name = "rsh_line_editor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "itertools",
- "thiserror",
- "unicode-width",
 ]
 
 [[package]]

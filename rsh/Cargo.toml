@@ -16,7 +16,8 @@ os_pipe = "0.9.2"
 shared_child = "0.3.5"
 which = "4.1.0"
 whoami = "1.1.2"
-rsh_line_editor = { version = "*", path = "../rsh-line-editor" }
+rsh-line-editor = { path = "../rsh-line-editor" }
+rsh-line-parser = { path = "../rsh-line-parser" }
 crossterm = "0.22.1"
 crossterm_winapi = "0.9.0"
 crossbeam = "0.8.1"

@@ -9,10 +9,10 @@ pub enum Error {}
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct CommandLine {
-    pub delimited_piped_commands: Vec<PipedCommand>,
+    pub delimited_pipe_command: Vec<PipeCommand>,
 }
 
-pub struct PipedCommand {
+pub struct PipeCommand {
     pub pipe_components: Vec<Command>,
 }
 
@@ -51,6 +51,7 @@ pub enum StdoutDestination {
     InheritStderr,
     PipeToNext,
     File(PathBuf),
+    Capture,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -59,6 +60,7 @@ pub enum StderrDestination {
     InheritStderr,
     PipeToNext,
     File(PathBuf),
+    Capture,
 }
 
 pub fn parse_command_line(
@@ -70,14 +72,14 @@ pub fn parse_command_line(
         .map(|tokens| parse_piped_command(tokens, default_iospec.clone()))
         .collect();
     delimited.map(|piped| CommandLine {
-        delimited_piped_commands: piped,
+        delimited_pipe_command: piped,
     })
 }
 
 pub fn parse_piped_command(
     tokens: &[FlattenedToken],
     default_iospec: IOSpec,
-) -> Result<PipedCommand> {
+) -> Result<PipeCommand> {
     let mut components = vec![];
     let cmds_toks = tokens
         .split(|tok| tok.data == FlattenedTokenKind::Delim)
@@ -97,7 +99,7 @@ pub fn parse_piped_command(
         components.push(parse_command(cmd_toks, iospec)?);
     }
 
-    Ok(PipedCommand {
+    Ok(PipeCommand {
         pipe_components: components,
     })
 }
@@ -126,6 +128,7 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
                             StderrDestination::InheritStderr => StdoutDestination::InheritStderr,
                             StderrDestination::PipeToNext => StdoutDestination::PipeToNext,
                             StderrDestination::File(path) => StdoutDestination::File(path.clone()),
+                            StderrDestination::Capture => StdoutDestination::Capture,
                         }
                     }
                     (RK::Stderr, RRK::Stdout) => {
@@ -134,6 +137,7 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
                             StdoutDestination::InheritStdout => StderrDestination::InheritStdout,
                             StdoutDestination::PipeToNext => StderrDestination::PipeToNext,
                             StdoutDestination::File(path) => StderrDestination::File(path.clone()),
+                            StdoutDestination::Capture => StderrDestination::Capture,
                         }
                     }
                     _ => {}

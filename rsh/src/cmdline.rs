@@ -29,6 +29,7 @@ pub enum StdoutDestination {
     Inherit,
     PipeToNext,
     File(PathBuf),
+    Capture,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,6 +37,7 @@ pub enum StderrDestination {
     Inherit,
     Stdout,
     File(PathBuf),
+    Capture,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
