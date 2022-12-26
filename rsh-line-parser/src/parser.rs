@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::token::{AtomKind, Token, TokenKind};
+use crate::token::{FlattenedToken, FlattenedTokenKind};
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
@@ -61,9 +61,12 @@ pub enum StderrDestination {
     File(PathBuf),
 }
 
-pub fn parse_command_line(tokens: &[Token], default_iospec: IOSpec) -> Result<CommandLine> {
+pub fn parse_command_line(
+    tokens: &[FlattenedToken],
+    default_iospec: IOSpec,
+) -> Result<CommandLine> {
     let delimited: Result<Vec<_>> = tokens
-        .split(|tok| tok.data == TokenKind::Delim)
+        .split(|tok| tok.data == FlattenedTokenKind::Delim)
         .map(|tokens| parse_piped_command(tokens, default_iospec.clone()))
         .collect();
     delimited.map(|piped| CommandLine {
@@ -71,10 +74,13 @@ pub fn parse_command_line(tokens: &[Token], default_iospec: IOSpec) -> Result<Co
     })
 }
 
-pub fn parse_piped_command(tokens: &[Token], default_iospec: IOSpec) -> Result<PipedCommand> {
+pub fn parse_piped_command(
+    tokens: &[FlattenedToken],
+    default_iospec: IOSpec,
+) -> Result<PipedCommand> {
     let mut components = vec![];
     let cmds_toks = tokens
-        .split(|tok| tok.data == TokenKind::Delim)
+        .split(|tok| tok.data == FlattenedTokenKind::Delim)
         .collect_vec();
     let len = cmds_toks.len();
     for (idx, cmd_toks) in cmds_toks.into_iter().enumerate() {
@@ -99,18 +105,18 @@ pub fn parse_piped_command(tokens: &[Token], default_iospec: IOSpec) -> Result<P
 /// ## Note
 ///
 /// Tokens must be flattened.
-pub fn parse_command(tokens: &[Token], default_iospec: IOSpec) -> Result<Command> {
+pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Result<Command> {
     use crate::token::{RedirectKind as RK, RedirectReferenceKind as RRK};
 
     let mut iospec = default_iospec;
     let mut args = vec![];
 
-    for arg_toks in tokens.split(|tok| tok.data == TokenKind::ArgDelim) {
+    for arg_toks in tokens.split(|tok| tok.data == FlattenedTokenKind::ArgDelim) {
         if arg_toks.is_empty() {
             continue;
         }
 
-        if let TokenKind::Redirect(redir) = &arg_toks[0].data {
+        if let FlattenedTokenKind::Redirect(redir) = &arg_toks[0].data {
             // Process redirect
             if let Some(rrk) = redir.reference {
                 match (redir.kind, rrk) {
@@ -151,22 +157,14 @@ pub fn parse_command(tokens: &[Token], default_iospec: IOSpec) -> Result<Command
     Ok(Command { args, iospec })
 }
 
-pub fn toks_to_string(toks: &[Token]) -> String {
-    use TokenKind::*;
-
-    fn push_atom(arg: &mut String, atom: &AtomKind) {
-        match atom {
-            AtomKind::Char(ch) => arg.push(*ch),
-            atom => panic!("internal error: non-char atom `{:?}` found", atom),
-        }
-    }
+pub fn toks_to_string(toks: &[FlattenedToken]) -> String {
+    use FlattenedTokenKind::*;
 
     let mut arg = String::new();
     for tok in toks {
         match &tok.data {
-            Atom(a) => push_atom(&mut arg, a),
-            SingleQuoted(q) => arg.extend(q.0.iter().copied()),
-            DoubleQuoted(q) => q.0.iter().for_each(|a| push_atom(&mut arg, a)),
+            Atom(a) => arg.push(*a),
+            Quoted(q) => arg.extend(q.iter().copied()),
             e => panic!("internal error: invalid token kind `{:?}` is in args", e),
         }
     }
@@ -174,12 +172,12 @@ pub fn toks_to_string(toks: &[Token]) -> String {
 }
 
 // pub struct Parser<'a> {
-//     tokens: &'a [Token],
+//     tokens: &'a [FlattenedToken],
 //     current: usize,
 // }
 //
 // impl<'a> Parser<'a> {
-//     pub fn new(tokens: &'a [Token]) -> Self {
+//     pub fn new(tokens: &'a [FlattenedToken]) -> Self {
 //         Self { tokens, current: 0 }
 //     }
 //
@@ -203,7 +201,7 @@ pub fn toks_to_string(toks: &[Token]) -> String {
 //
 //         // Skip leading ArgDelims.
 //         while let Some(tok) = self.peek() {
-//             if !matches!(tok.data, TokenKind::ArgDelim) {
+//             if !matches!(tok.data, FlattenedTokenKind::ArgDelim) {
 //                 break;
 //             }
 //         }
@@ -212,28 +210,28 @@ pub fn toks_to_string(toks: &[Token]) -> String {
 //         let mut iospec = default_iospec;
 //         while let Some(tok) = self.peek() {
 //             match &tok.data {
-//                 TokenKind::Delim => break,
-//                 TokenKind::Redirect(redir) => todo!(),
-//                 TokenKind::Pipe => todo!(),
-//                 TokenKind::Atom(_) => todo!(),
-//                 TokenKind::SingleQuoted(_) => todo!(),
-//                 TokenKind::DoubleQuoted(_) => todo!(),
-//                 TokenKind::ArgDelim => todo!(),
+//                 FlattenedTokenKind::Delim => break,
+//                 FlattenedTokenKind::Redirect(redir) => todo!(),
+//                 FlattenedTokenKind::Pipe => todo!(),
+//                 FlattenedTokenKind::Atom(_) => todo!(),
+//                 FlattenedTokenKind::SingleQuoted(_) => todo!(),
+//                 FlattenedTokenKind::DoubleQuoted(_) => todo!(),
+//                 FlattenedTokenKind::ArgDelim => todo!(),
 //             }
 //         }
 //
 //         Ok(Command { args, iospec })
 //     }
 //
-//     fn peek(&self) -> Option<&'a Token> {
+//     fn peek(&self) -> Option<&'a FlattenedToken> {
 //         self.lookahead(0)
 //     }
 //
-//     fn lookahead(&self, n: usize) -> Option<&'a Token> {
+//     fn lookahead(&self, n: usize) -> Option<&'a FlattenedToken> {
 //         self.peek_rest().get(n)
 //     }
 //
-//     fn peek_rest(&self) -> &'a [Token] {
+//     fn peek_rest(&self) -> &'a [FlattenedToken] {
 //         &self.tokens[self.current..]
 //     }
 // }

@@ -1,6 +1,7 @@
 use crate::span::Spanned;
 
 pub type Token = Spanned<TokenKind>;
+pub type FlattenedToken = Spanned<FlattenedTokenKind>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TokenKind {
@@ -197,8 +198,9 @@ impl From<(RedirectKind, RedirectReferenceKind)> for Redirect {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FlattenedTokenKind {
     Atom(char),
-    SingleQuoted(Vec<char>),
-    DoubleQuoted(Vec<char>),
+    Quoted(Vec<char>),
     ArgDelim,
     Redirect(Redirect),
+    Pipe,
+    Delim,
 }
