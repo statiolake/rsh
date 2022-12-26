@@ -82,7 +82,7 @@ pub fn parse_piped_command(
 ) -> Result<PipeCommand> {
     let mut components = vec![];
     let cmds_toks = tokens
-        .split(|tok| tok.data == FlattenedTokenKind::Delim)
+        .split(|tok| tok.data == FlattenedTokenKind::Pipe)
         .collect_vec();
     let len = cmds_toks.len();
     for (idx, cmd_toks) in cmds_toks.into_iter().enumerate() {
