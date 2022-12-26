@@ -30,21 +30,25 @@ pub enum TokenKind {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SingleQuoted(pub Vec<char>);
+
 impl From<SingleQuoted> for TokenKind {
     fn from(v: SingleQuoted) -> Self {
         TokenKind::SingleQuoted(v)
     }
 }
+
 impl From<Vec<char>> for SingleQuoted {
     fn from(v: Vec<char>) -> Self {
         Self(v)
     }
 }
+
 impl From<&[char]> for SingleQuoted {
     fn from(v: &[char]) -> Self {
         Self(v.to_vec())
     }
 }
+
 impl From<&str> for SingleQuoted {
     fn from(v: &str) -> Self {
         Self(v.chars().collect())
@@ -53,16 +57,19 @@ impl From<&str> for SingleQuoted {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DoubleQuoted(pub Vec<AtomKind>);
+
 impl From<DoubleQuoted> for TokenKind {
     fn from(v: DoubleQuoted) -> Self {
         TokenKind::DoubleQuoted(v)
     }
 }
+
 impl From<Vec<AtomKind>> for DoubleQuoted {
     fn from(v: Vec<AtomKind>) -> Self {
         DoubleQuoted(v)
     }
 }
+
 impl From<&[AtomKind]> for DoubleQuoted {
     fn from(v: &[AtomKind]) -> Self {
         DoubleQuoted(v.to_vec())
@@ -80,6 +87,7 @@ pub enum AtomKind {
     /// Sub shell invocation.
     Substitution(Substitution),
 }
+
 impl From<AtomKind> for TokenKind {
     fn from(v: AtomKind) -> Self {
         Self::Atom(v)
@@ -100,16 +108,19 @@ impl From<char> for AtomKind {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct EnvVar(pub String);
+
 impl From<EnvVar> for TokenKind {
     fn from(v: EnvVar) -> Self {
         Self::Atom(AtomKind::EnvVar(v))
     }
 }
+
 impl From<EnvVar> for AtomKind {
     fn from(v: EnvVar) -> Self {
         Self::EnvVar(v)
     }
 }
+
 impl From<&str> for EnvVar {
     fn from(s: &str) -> Self {
         Self(s.to_string())
@@ -118,16 +129,19 @@ impl From<&str> for EnvVar {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Substitution(pub Vec<Token>);
+
 impl From<Substitution> for TokenKind {
     fn from(v: Substitution) -> Self {
         Self::Atom(AtomKind::Substitution(v))
     }
 }
+
 impl From<Substitution> for AtomKind {
     fn from(v: Substitution) -> Self {
         Self::Substitution(v)
     }
 }
+
 impl From<&[Token]> for Substitution {
     fn from(v: &[Token]) -> Self {
         Self(v.to_vec())
@@ -164,6 +178,7 @@ impl From<Redirect> for TokenKind {
         Self::Redirect(v)
     }
 }
+
 impl From<RedirectKind> for Redirect {
     fn from(kind: RedirectKind) -> Self {
         Self {
@@ -172,6 +187,7 @@ impl From<RedirectKind> for Redirect {
         }
     }
 }
+
 impl From<(RedirectKind, RedirectReferenceKind)> for Redirect {
     fn from((kind, reference): (RedirectKind, RedirectReferenceKind)) -> Self {
         Self {
