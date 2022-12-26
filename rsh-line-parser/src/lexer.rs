@@ -133,20 +133,23 @@ impl<'a> Lexer<'a> {
     ///
     /// At first lowering the command line text will be `echo $(ls)`, but it's not substitution
     /// invocation here. Much like `echo '$(ls)'`.
-    pub fn partial_tokenize<A: AtomTokenizable>(
+    pub fn tokenize_substitution<A: AtomTokenizable>(
         &mut self,
         delim: bool,
     ) -> Result<Vec<TokenBase<A>>> {
         let mut tokens = Vec::new();
 
         while self.peek().is_some() {
-            tokens.push(self.partial_next_token(delim)?);
+            tokens.push(self.next_token_substitution(delim)?);
         }
 
         Ok(tokens)
     }
 
-    pub fn partial_next_token<A: AtomTokenizable>(&mut self, delim: bool) -> Result<TokenBase<A>> {
+    pub fn next_token_substitution<A: AtomTokenizable>(
+        &mut self,
+        delim: bool,
+    ) -> Result<TokenBase<A>> {
         if delim {
             if let Some(span) = self.skip_whitespace() {
                 return Ok(TokenBase::new(span, TokenKindBase::ArgDelim));
@@ -438,19 +441,19 @@ impl AtomTokenizable for char {
     }
 }
 
+pub fn normalize_tokens<A>(tokens: &mut Vec<TokenBase<A>>) {
+    remove_surrounding_arg_delim_or_delim(tokens);
+    remove_duplicated_arg_delim_or_delim(tokens);
+    remove_arg_delim_around_delim_or_pipe(tokens);
+    normalize_arg_delim_around_redirect(tokens);
+}
+
 fn kind_at<A>(tokens: &[TokenBase<A>], idx: i32) -> Option<&TokenKindBase<A>> {
     if idx < 0 {
         None
     } else {
         tokens.get(idx as usize).map(|t| &t.data)
     }
-}
-
-fn normalize_tokens<A>(tokens: &mut Vec<TokenBase<A>>) {
-    remove_surrounding_arg_delim_or_delim(tokens);
-    remove_duplicated_arg_delim_or_delim(tokens);
-    remove_arg_delim_around_delim_or_pipe(tokens);
-    normalize_arg_delim_around_redirect(tokens);
 }
 
 fn remove_surrounding_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {

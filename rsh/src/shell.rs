@@ -5,12 +5,12 @@ use anyhow::Result;
 use itertools::Itertools;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use rsh_line_parser::{
-    lexer::{Lexer, ESCAPE_CHAR},
+    lexer::{normalize_tokens, Lexer, ESCAPE_CHAR},
     parser::{
         parse_command_line, CommandLine, IOSpec, PipeCommand, StderrDestination, StdinSource,
         StdoutDestination,
     },
-    span::{Span, Spanned},
+    span::Span,
     token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind},
 };
 use std::fmt::Display;
@@ -107,9 +107,9 @@ impl ShellState {
     }
 }
 
-struct CapturedOutput {
-    stdout: Option<String>,
-    stderr: Option<String>,
+pub struct CapturedOutput {
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
 }
 
 impl CapturedOutput {
@@ -124,107 +124,91 @@ impl CapturedOutput {
 fn run_tokens(
     state: &mut ShellState,
     tokens: Vec<Token>,
-    default_iospec: IOSpec,
+    iospec: IOSpec,
 ) -> Result<CapturedOutput> {
-    fn flatten_atom(
-        state: &mut ShellState,
-        default_iospec: IOSpec,
-        flattened_tokens: &mut Vec<FlattenedToken>,
-        span: Span,
-        atom: AtomKind,
-    ) -> Result<()> {
-        match atom {
-            AtomKind::Char(ch) => flattened_tokens.push(Spanned {
-                span,
-                data: FlattenedTokenKind::Atom(ch),
-            }),
-            AtomKind::EnvVar(env_var) => state
-                .var(&env_var.0)
-                .unwrap_or("".to_string())
-                .chars()
-                .for_each(|ch| {
-                    flattened_tokens.push(Spanned {
-                        span,
-                        data: FlattenedTokenKind::Atom(ch),
-                    })
-                }),
-            AtomKind::Substitution(st) => {
-                let iospec = IOSpec {
-                    stdout: StdoutDestination::Capture,
-                    ..default_iospec.clone()
-                };
-
-                let output = run_tokens(state, st.0, iospec)?;
-                output
-                    .stdout
-                    .expect("internal error: cannot access captured stdout")
-                    .chars()
-                    .for_each(|ch| {
-                        flattened_tokens.push(Spanned {
-                            span,
-                            data: FlattenedTokenKind::Atom(ch),
-                        })
-                    });
-            }
-        }
-
-        Ok(())
-    }
-
-    let mut flattened_tokens = vec![];
-
-    for token in tokens {
-        match token.data {
-            TokenKind::Atom(atom) => flatten_atom(
-                state,
-                default_iospec.clone(),
-                &mut flattened_tokens,
-                token.span,
-                atom,
-            )?,
-            TokenKind::SingleQuoted(q) => {
-                let span = token.span;
-                flattened_tokens.extend(
-                    q.0.into_iter()
-                        .map(|ch| FlattenedToken::new(span, FlattenedTokenKind::Atom(ch))),
-                )
-            }
-            TokenKind::DoubleQuoted(q) => {
-                let span = token.span;
-                q.0.into_iter()
-                    .map(|atom| {
-                        flatten_atom(
-                            state,
-                            default_iospec.clone(),
-                            &mut flattened_tokens,
-                            span,
-                            atom,
-                        )
-                    })
-                    .collect::<Result<_>>()?
-            }
-            TokenKind::ArgDelim => flattened_tokens.push(Spanned {
-                span: token.span,
-                data: FlattenedTokenKind::ArgDelim,
-            }),
-            TokenKind::Redirect(redir) => flattened_tokens.push(Spanned {
-                span: token.span,
-                data: FlattenedTokenKind::Redirect(redir),
-            }),
-            TokenKind::Pipe => flattened_tokens.push(Spanned {
-                span: token.span,
-                data: FlattenedTokenKind::Pipe,
-            }),
-            TokenKind::Delim => flattened_tokens.push(Spanned {
-                span: token.span,
-                data: FlattenedTokenKind::Delim,
-            }),
-        }
-    }
-
-    let command_line = parse_command_line(&flattened_tokens, default_iospec)?;
-
+    let res = flatten(state, tokens, iospec.clone())?;
+    let command_line = parse_command_line(&res, iospec)?;
     run_command_line(state, command_line)
+}
+
+fn flatten(
+    state: &mut ShellState,
+    tokens: Vec<Token>,
+    iospec: IOSpec,
+) -> Result<Vec<FlattenedToken>> {
+    let mut res = vec![];
+    for token in tokens {
+        res.extend(flatten_token(state, token, iospec.clone())?);
+    }
+    normalize_tokens(&mut res);
+
+    Ok(res)
+}
+
+fn flatten_token(
+    state: &mut ShellState,
+    token: Token,
+    iospec: IOSpec,
+) -> Result<Vec<FlattenedToken>> {
+    let mut res = vec![];
+
+    let span = token.span;
+
+    match token.data {
+        TokenKind::Atom(atom) => res.extend(flatten_atom(state, span, atom, false, iospec)?),
+        TokenKind::SingleQuoted(q) => {
+            q.0.into_iter()
+                .for_each(|ch| res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch))))
+        }
+        TokenKind::DoubleQuoted(q) => q.0.into_iter().try_for_each(|atom| {
+            flatten_atom(state, span, atom, true, iospec.clone()).map(|t| res.extend(t))
+        })?,
+        TokenKind::ArgDelim => res.push(FlattenedToken::new(span, FlattenedTokenKind::ArgDelim)),
+        TokenKind::Redirect(redir) => res.push(FlattenedToken::new(
+            span,
+            FlattenedTokenKind::Redirect(redir),
+        )),
+        TokenKind::Pipe => res.push(FlattenedToken::new(span, FlattenedTokenKind::Pipe)),
+        TokenKind::Delim => res.push(FlattenedToken::new(span, FlattenedTokenKind::Delim)),
+    }
+
+    Ok(res)
+}
+
+fn flatten_atom(
+    state: &mut ShellState,
+    span: Span,
+    atom: AtomKind,
+    in_double_quote: bool,
+    iospec: IOSpec,
+) -> Result<Vec<FlattenedToken>> {
+    let mut res = vec![];
+
+    match atom {
+        AtomKind::Char(ch) => res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch))),
+        AtomKind::EnvVar(env_var) => state
+            .var(&env_var.0)
+            .unwrap_or_default()
+            .chars()
+            .for_each(|ch| res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch)))),
+        AtomKind::Substitution(st) => {
+            let iospec = IOSpec {
+                stdout: StdoutDestination::Capture,
+                ..iospec
+            };
+
+            let output = run_tokens(state, st.0, iospec)?
+                .stdout
+                .expect("internal error: cannot access captured stdout");
+
+            Lexer::new(&output.chars().collect_vec())
+                .tokenize_substitution(!in_double_quote)?
+                .into_iter()
+                .for_each(|token| res.push(token));
+        }
+    }
+
+    Ok(res)
 }
 
 fn run_command_line(state: &mut ShellState, command_line: CommandLine) -> Result<CapturedOutput> {
@@ -238,7 +222,7 @@ fn run_command_line(state: &mut ShellState, command_line: CommandLine) -> Result
 
 fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result<CapturedOutput> {
     let components = pipe_command.pipe_components;
-    if components.len() == 0 {
+    if components.is_empty() {
         return Ok(CapturedOutput {
             stdout: None,
             stderr: None,
