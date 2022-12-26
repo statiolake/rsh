@@ -2,7 +2,7 @@ use crate::{
     span::{Span, Spanned},
     token::{
         AtomKind, DoubleQuoted, EnvVar, Redirect, RedirectKind, RedirectReferenceKind,
-        SingleQuoted, Substitution, Token, TokenKind,
+        SingleQuoted, Substitution, TokenBase, TokenKindBase,
     },
 };
 
@@ -74,8 +74,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn tokenize(&mut self) -> Result<Vec<Token>> {
-        let mut tokens: Vec<Token> = Vec::new();
+    pub fn tokenize<A: AtomTokenizable>(&mut self) -> Result<Vec<TokenBase<A>>> {
+        let mut tokens: Vec<TokenBase<A>> = Vec::new();
 
         while let Some(ch) = self.peek() {
             if self.substitution_level > 0 && ch == ')' {
@@ -91,12 +91,9 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    pub fn next_token(&mut self) -> Result<Token> {
+    pub fn next_token<A: AtomTokenizable>(&mut self) -> Result<TokenBase<A>> {
         if let Some(span) = self.skip_whitespace() {
-            return Ok(Token {
-                data: TokenKind::ArgDelim,
-                span,
-            });
+            return Ok(TokenBase::new(span, TokenKindBase::ArgDelim));
         };
 
         macro_rules! into {
@@ -112,7 +109,7 @@ impl<'a> Lexer<'a> {
             ['"', ..] => into!(self.next_double_quoted()),
             ['>' | '<', ..] | ['1' | '2', '>', ..] => into!(self.next_redirect()),
             ['|' | ';', ..] => into!(self.next_delim()),
-            _ => into!(self.next_atom()),
+            _ => into!(A::tokenize_atom(self)),
         }
     }
 
@@ -134,7 +131,10 @@ impl<'a> Lexer<'a> {
     ///
     /// At first lowering the command line text will be `echo $(ls)`, but it's not substitution
     /// invocation here. Much like `echo '$(ls)'`.
-    pub fn partial_tokenize(&mut self, delim: bool) -> Result<Vec<Token>> {
+    pub fn partial_tokenize<A: AtomTokenizable>(
+        &mut self,
+        delim: bool,
+    ) -> Result<Vec<TokenBase<A>>> {
         let mut tokens = Vec::new();
 
         while self.peek().is_some() {
@@ -144,13 +144,10 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    pub fn partial_next_token(&mut self, delim: bool) -> Result<Token> {
+    pub fn partial_next_token<A: AtomTokenizable>(&mut self, delim: bool) -> Result<TokenBase<A>> {
         if delim {
             if let Some(span) = self.skip_whitespace() {
-                return Ok(Token {
-                    data: TokenKind::ArgDelim,
-                    span,
-                });
+                return Ok(TokenBase::new(span, TokenKindBase::ArgDelim));
             }
         }
 
@@ -180,7 +177,7 @@ impl<'a> Lexer<'a> {
         Err(Error::UnbalancedQuotedString { span })
     }
 
-    fn next_double_quoted(&mut self) -> Result<Spanned<DoubleQuoted>> {
+    fn next_double_quoted<A: AtomTokenizable>(&mut self) -> Result<Spanned<DoubleQuoted<A>>> {
         let mut span = self.eat(['"']);
         let mut atoms = Vec::new();
         while let Some(ch) = self.peek() {
@@ -243,21 +240,15 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    fn next_delim(&mut self) -> Result<Token> {
+    fn next_delim<A>(&mut self) -> Result<TokenBase<A>> {
         match self.peek() {
             Some('|') => {
                 let span = self.eat(['|']);
-                Ok(Token {
-                    data: TokenKind::Pipe,
-                    span,
-                })
+                Ok(TokenBase::new(span, TokenKindBase::Pipe))
             }
             Some(';') => {
                 let span = self.eat([';']);
-                Ok(Token {
-                    data: TokenKind::Delim,
-                    span,
-                })
+                Ok(TokenBase::new(span, TokenKindBase::Delim))
             }
             Some(ch) => panic!("internal error: unknown delimiter `{}`", ch),
             None => panic!("internal error: no delimiter"),
@@ -368,19 +359,6 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    fn next_atom(&mut self) -> Result<Spanned<AtomKind>> {
-        macro_rules! into {
-            ($e:expr) => {
-                $e.map(|v| v.map(|v| v.into()))
-            };
-        }
-        match self.peek_rest() {
-            ['$', '(', ..] => into!(self.next_substitution()),
-            ['$', ..] => into!(self.next_envvar()),
-            _ => into!(self.next_char()),
-        }
-    }
-
     fn skip_whitespace(&mut self) -> Option<Span> {
         let mut span: Option<Span> = None;
         while let Some(ch) = self.peek() {
@@ -433,19 +411,46 @@ impl<'a> Lexer<'a> {
     }
 }
 
-fn kind_at(tokens: &[Token], idx: usize) -> Option<&TokenKind> {
+pub trait AtomTokenizable: From<char> {
+    fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>>
+    where
+        Self: Sized;
+}
+
+impl AtomTokenizable for AtomKind {
+    fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>> {
+        match lexer.peek_rest() {
+            ['$', '(', ..] => lexer
+                .next_substitution()
+                .map(|v| v.map(|st| AtomKind::Substitution(st))),
+            ['$', ..] => lexer
+                .next_envvar()
+                .map(|v| v.map(|env| AtomKind::EnvVar(env))),
+            _ => lexer.next_char().map(|v| v.map(|ch| AtomKind::Char(ch))),
+        }
+    }
+}
+
+impl AtomTokenizable for char {
+    fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>> {
+        lexer.next_char()
+    }
+}
+
+fn kind_at<A>(tokens: &[TokenBase<A>], idx: usize) -> Option<&TokenKindBase<A>> {
     tokens.get(idx).map(|t| &t.data)
 }
 
-fn normalize_tokens(tokens: &mut Vec<Token>) {
+fn normalize_tokens<A>(tokens: &mut Vec<TokenBase<A>>) {
     remove_surrounding_arg_delim_or_delim(tokens);
     remove_duplicated_arg_delim_or_delim(tokens);
     remove_arg_delim_around_delim_or_pipe(tokens);
     normalize_arg_delim_around_redirect(tokens);
 }
 
-fn remove_surrounding_arg_delim_or_delim(tokens: &mut Vec<Token>) {
-    let is_non_delim = |tok: &Token| !matches!(tok.data, TokenKind::Delim | TokenKind::ArgDelim);
+fn remove_surrounding_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
+    let is_non_delim =
+        |tok: &TokenBase<A>| !matches!(tok.data, TokenKindBase::Delim | TokenKindBase::ArgDelim);
 
     // Remove leading delimiters
     let first_non_delim = tokens.iter().position(is_non_delim).unwrap_or(tokens.len());
@@ -459,7 +464,7 @@ fn remove_surrounding_arg_delim_or_delim(tokens: &mut Vec<Token>) {
     tokens.drain((last_non_delim + 1)..);
 }
 
-fn remove_duplicated_arg_delim_or_delim(tokens: &mut Vec<Token>) {
+fn remove_duplicated_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
     fn join<T, U>(l: Option<T>, r: Option<U>) -> Option<(T, U)> {
         l.and_then(|l| r.map(|r| (l, r)))
     }
@@ -468,7 +473,10 @@ fn remove_duplicated_arg_delim_or_delim(tokens: &mut Vec<Token>) {
     while idx < tokens.len() {
         if matches!(
             join(kind_at(tokens, idx), kind_at(tokens, idx - 1)),
-            Some((TokenKind::ArgDelim, TokenKind::ArgDelim) | (TokenKind::Delim, TokenKind::Delim))
+            Some(
+                (TokenKindBase::ArgDelim, TokenKindBase::ArgDelim)
+                    | (TokenKindBase::Delim, TokenKindBase::Delim)
+            )
         ) {
             tokens.remove(idx);
             idx -= 1;
@@ -478,17 +486,17 @@ fn remove_duplicated_arg_delim_or_delim(tokens: &mut Vec<Token>) {
     }
 }
 
-fn remove_arg_delim_around_delim_or_pipe(tokens: &mut Vec<Token>) {
+fn remove_arg_delim_around_delim_or_pipe<A>(tokens: &mut Vec<TokenBase<A>>) {
     let mut idx = 0;
     while idx < tokens.len() {
-        if matches!(tokens[idx].data, TokenKind::Delim | TokenKind::Pipe) {
-            if matches!(kind_at(tokens, idx - 1), Some(TokenKind::ArgDelim)) {
+        if matches!(tokens[idx].data, TokenKindBase::Delim | TokenKindBase::Pipe) {
+            if matches!(kind_at(tokens, idx - 1), Some(TokenKindBase::ArgDelim)) {
                 // Remove ArgDelim before Delim.
                 tokens.remove(idx - 1);
                 idx -= 1;
             }
 
-            if matches!(kind_at(tokens, idx + 1), Some(TokenKind::ArgDelim)) {
+            if matches!(kind_at(tokens, idx + 1), Some(TokenKindBase::ArgDelim)) {
                 // Remove ArgDelim after Delim.
                 tokens.remove(idx + 1);
             }
@@ -498,27 +506,27 @@ fn remove_arg_delim_around_delim_or_pipe(tokens: &mut Vec<Token>) {
     }
 }
 
-fn normalize_arg_delim_around_redirect(tokens: &mut Vec<Token>) {
+fn normalize_arg_delim_around_redirect<A>(tokens: &mut Vec<TokenBase<A>>) {
     let mut idx = 0;
 
     while idx < tokens.len() {
-        if matches!(tokens[idx].data, TokenKind::Redirect(_)) {
+        if matches!(tokens[idx].data, TokenKindBase::Redirect(_)) {
             // If current token is redirect,
             // 1. ensure token before redirect is ArgDelim,
             // 2. remove ArgDelim after redirect if exists.
-            if !matches!(kind_at(tokens, idx - 1), Some(TokenKind::ArgDelim)) {
+            if !matches!(kind_at(tokens, idx - 1), Some(TokenKindBase::ArgDelim)) {
                 let span = Span::from(tokens[idx - 1].span.end..tokens[idx].span.start);
                 tokens.insert(
                     idx,
                     Spanned {
                         span,
-                        data: TokenKind::ArgDelim,
+                        data: TokenKindBase::ArgDelim,
                     },
                 );
                 idx += 1;
             }
 
-            if matches!(kind_at(tokens, idx + 1), Some(TokenKind::ArgDelim)) {
+            if matches!(kind_at(tokens, idx + 1), Some(TokenKindBase::ArgDelim)) {
                 tokens.remove(idx + 1);
             }
         }
@@ -530,6 +538,7 @@ fn normalize_arg_delim_around_redirect(tokens: &mut Vec<Token>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token::Token;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
 
@@ -566,7 +575,7 @@ mod tests {
         };
         ($range:expr, argd) => {
             Token {
-                data: TokenKind::ArgDelim,
+                data: TokenKindBase::ArgDelim,
                 span: $range.into(),
             }
         };
@@ -578,13 +587,13 @@ mod tests {
         };
         ($range:expr, pipe) => {
             Token {
-                data: TokenKind::Pipe,
+                data: TokenKindBase::Pipe,
                 span: $range.into(),
             }
         };
         ($range:expr, delim) => {
             Token {
-                data: TokenKind::Delim,
+                data: TokenKindBase::Delim,
                 span: $range.into(),
             }
         };

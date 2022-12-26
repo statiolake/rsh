@@ -1,18 +1,28 @@
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
-pub type Token = Spanned<TokenKind>;
-pub type FlattenedToken = Spanned<FlattenedTokenKind>;
+pub type TokenBase<A> = Spanned<TokenKindBase<A>>;
+
+pub type TokenKind = TokenKindBase<AtomKind>;
+pub type Token = TokenBase<AtomKind>;
+pub type FlattenedTokenKind = TokenKindBase<char>;
+pub type FlattenedToken = TokenBase<char>;
+
+impl<A> TokenBase<A> {
+    pub fn new(span: Span, data: TokenKindBase<A>) -> Self {
+        Self { span, data }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TokenKind {
+pub enum TokenKindBase<A> {
     /// Normal atom.
-    Atom(AtomKind),
+    Atom(A),
 
     /// Single-quoted argument.
     SingleQuoted(SingleQuoted),
 
     /// Double-quoted argument.
-    DoubleQuoted(DoubleQuoted),
+    DoubleQuoted(DoubleQuoted<A>),
 
     /// Argument delimiter. Usually an whitespace (outside of quotes).
     ArgDelim,
@@ -31,9 +41,9 @@ pub enum TokenKind {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct SingleQuoted(pub Vec<char>);
 
-impl From<SingleQuoted> for TokenKind {
+impl<A> From<SingleQuoted> for TokenKindBase<A> {
     fn from(v: SingleQuoted) -> Self {
-        TokenKind::SingleQuoted(v)
+        Self::SingleQuoted(v)
     }
 }
 
@@ -43,36 +53,18 @@ impl From<Vec<char>> for SingleQuoted {
     }
 }
 
-impl From<&[char]> for SingleQuoted {
-    fn from(v: &[char]) -> Self {
-        Self(v.to_vec())
-    }
-}
-
-impl From<&str> for SingleQuoted {
-    fn from(v: &str) -> Self {
-        Self(v.chars().collect())
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct DoubleQuoted(pub Vec<AtomKind>);
+pub struct DoubleQuoted<A>(pub Vec<A>);
 
-impl From<DoubleQuoted> for TokenKind {
-    fn from(v: DoubleQuoted) -> Self {
-        TokenKind::DoubleQuoted(v)
+impl<A> From<DoubleQuoted<A>> for TokenKindBase<A> {
+    fn from(v: DoubleQuoted<A>) -> Self {
+        Self::DoubleQuoted(v)
     }
 }
 
-impl From<Vec<AtomKind>> for DoubleQuoted {
-    fn from(v: Vec<AtomKind>) -> Self {
+impl<A> From<Vec<A>> for DoubleQuoted<A> {
+    fn from(v: Vec<A>) -> Self {
         DoubleQuoted(v)
-    }
-}
-
-impl From<&[AtomKind]> for DoubleQuoted {
-    fn from(v: &[AtomKind]) -> Self {
-        DoubleQuoted(v.to_vec())
     }
 }
 
@@ -94,12 +86,6 @@ impl From<AtomKind> for TokenKind {
     }
 }
 
-impl From<char> for TokenKind {
-    fn from(v: char) -> Self {
-        Self::Atom(AtomKind::Char(v))
-    }
-}
-
 impl From<char> for AtomKind {
     fn from(v: char) -> Self {
         Self::Char(v)
@@ -109,32 +95,20 @@ impl From<char> for AtomKind {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct EnvVar(pub String);
 
-impl From<EnvVar> for TokenKind {
-    fn from(v: EnvVar) -> Self {
-        Self::Atom(AtomKind::EnvVar(v))
-    }
-}
-
 impl From<EnvVar> for AtomKind {
     fn from(v: EnvVar) -> Self {
         Self::EnvVar(v)
     }
 }
 
-impl From<&str> for EnvVar {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
+impl From<String> for EnvVar {
+    fn from(s: String) -> Self {
+        Self(s)
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Substitution(pub Vec<Token>);
-
-impl From<Substitution> for TokenKind {
-    fn from(v: Substitution) -> Self {
-        Self::Atom(AtomKind::Substitution(v))
-    }
-}
 
 impl From<Substitution> for AtomKind {
     fn from(v: Substitution) -> Self {
@@ -142,9 +116,9 @@ impl From<Substitution> for AtomKind {
     }
 }
 
-impl From<&[Token]> for Substitution {
-    fn from(v: &[Token]) -> Self {
-        Self(v.to_vec())
+impl From<Vec<Token>> for Substitution {
+    fn from(v: Vec<Token>) -> Self {
+        Self(v)
     }
 }
 
@@ -173,7 +147,7 @@ pub struct Redirect {
     pub reference: Option<RedirectReferenceKind>,
 }
 
-impl From<Redirect> for TokenKind {
+impl<A> From<Redirect> for TokenKindBase<A> {
     fn from(v: Redirect) -> Self {
         Self::Redirect(v)
     }
@@ -193,51 +167,6 @@ impl From<(RedirectKind, RedirectReferenceKind)> for Redirect {
         Self {
             kind,
             reference: Some(reference),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FlattenedTokenKind {
-    Atom(char),
-    Quoted(Vec<char>),
-    ArgDelim,
-    Redirect(Redirect),
-    Pipe,
-    Delim,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("{} is not a flat token kind", 0)]
-pub struct NotFlatTokenError(TokenKind);
-
-impl TryFrom<TokenKind> for FlattenedTokenKind {
-    type Error = NotFlatTokenError;
-
-    fn try_from(value: TokenKind) -> Result<Self, Self::Error> {
-        fn atom_to_char(atom: AtomKind) -> Result<char, NotFlatTokenError> {
-            match atom {
-                AtomKind::Char(ch) => Ok(ch),
-                _ => Err(NotFlatTokenError(TokenKind::Atom(atom))),
-            }
-        }
-
-        match value {
-            TokenKind::Atom(atom) => Ok(FlattenedTokenKind::Atom(atom_to_char(atom)?)),
-            TokenKind::SingleQuoted(single_quoted) => {
-                Ok(FlattenedTokenKind::Quoted(single_quoted.0))
-            }
-            TokenKind::DoubleQuoted(double_quoted) => Ok(FlattenedTokenKind::Quoted(
-                double_quoted
-                    .0
-                    .into_iter()
-                    .map(atom_to_char)
-                    .collect::<Result<_, _>>()?,
-            )),
-            TokenKind::ArgDelim => Ok(FlattenedTokenKind::ArgDelim),
-            TokenKind::Redirect(redir) => Ok(FlattenedTokenKind::Redirect(redir)),
-            TokenKind::Pipe => Ok(FlattenedTokenKind::Pipe),
-            TokenKind::Delim => Ok(FlattenedTokenKind::Delim),
         }
     }
 }
