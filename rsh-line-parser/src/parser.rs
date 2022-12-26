@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::lexer::{AtomKind, Token, TokenKind};
+use crate::token::{AtomKind, Token, TokenKind};
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
@@ -9,11 +9,11 @@ pub enum Error {}
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct CommandLine {
-    pub piped_commands: Vec<PipedCommand>,
+    pub delimited_piped_commands: Vec<PipedCommand>,
 }
 
 pub struct PipedCommand {
-    pub components: Vec<Command>,
+    pub pipe_components: Vec<Command>,
 }
 
 pub struct Command {
@@ -62,12 +62,12 @@ pub enum StderrDestination {
 }
 
 pub fn parse_command_line(tokens: &[Token], default_iospec: IOSpec) -> Result<CommandLine> {
-    let piped: Result<Vec<_>> = tokens
+    let delimited: Result<Vec<_>> = tokens
         .split(|tok| tok.data == TokenKind::Delim)
         .map(|tokens| parse_piped_command(tokens, default_iospec.clone()))
         .collect();
-    piped.map(|piped| CommandLine {
-        piped_commands: piped,
+    delimited.map(|piped| CommandLine {
+        delimited_piped_commands: piped,
     })
 }
 
@@ -91,14 +91,16 @@ pub fn parse_piped_command(tokens: &[Token], default_iospec: IOSpec) -> Result<P
         components.push(parse_command(cmd_toks, iospec)?);
     }
 
-    Ok(PipedCommand { components })
+    Ok(PipedCommand {
+        pipe_components: components,
+    })
 }
 
 /// ## Note
 ///
 /// Tokens must be flattened.
 pub fn parse_command(tokens: &[Token], default_iospec: IOSpec) -> Result<Command> {
-    use crate::lexer::{RedirectKind as RK, RedirectReferenceKind as RRK};
+    use crate::token::{RedirectKind as RK, RedirectReferenceKind as RRK};
 
     let mut iospec = default_iospec;
     let mut args = vec![];
