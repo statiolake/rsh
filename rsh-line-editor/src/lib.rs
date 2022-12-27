@@ -238,8 +238,8 @@ fn handle_completion<P>(
     escape_char: Option<char>,
 ) -> Result<()> {
     let end = buf.cursor_at;
-    // check quotation first; is this argument quoted?
 
+    // check quotation first; is this argument quoted?
     let ctx =
         buf.chars()
             .enumerate()

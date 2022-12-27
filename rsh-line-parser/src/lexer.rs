@@ -63,14 +63,32 @@ pub struct Lexer<'a> {
     current: usize,
 
     substitution_level: usize,
+
+    /// Keep lexer running even when there's error
+    recover_error: bool,
+
+    /// Do normalization
+    normalize: bool,
 }
 
 impl<'a> Lexer<'a> {
+    pub fn recover_error(&mut self, value: bool) -> &mut Self {
+        self.recover_error = value;
+        self
+    }
+
+    pub fn normalize(&mut self, value: bool) -> &mut Self {
+        self.normalize = value;
+        self
+    }
+
     pub fn new(source: &'a [char]) -> Self {
         Self {
             source,
             current: 0,
             substitution_level: 0,
+            recover_error: false,
+            normalize: true,
         }
     }
 
@@ -86,7 +104,9 @@ impl<'a> Lexer<'a> {
         }
 
         // Normalize tokens
-        normalize_tokens(&mut tokens);
+        if self.normalize {
+            normalize_tokens(&mut tokens);
+        }
 
         Ok(tokens)
     }
@@ -177,7 +197,11 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Err(Error::UnbalancedQuotedString { span })
+        if self.recover_error {
+            Ok(Spanned::new(span, SingleQuoted(chars)))
+        } else {
+            Err(Error::UnbalancedQuotedString { span })
+        }
     }
 
     fn next_double_quoted<A: AtomTokenizable>(&mut self) -> Result<Spanned<DoubleQuoted<A>>> {
@@ -197,7 +221,11 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        Err(Error::UnbalancedQuotedString { span })
+        if self.recover_error {
+            Ok(Spanned::new(span, DoubleQuoted(atoms)))
+        } else {
+            Err(Error::UnbalancedQuotedString { span })
+        }
     }
 
     fn next_redirect(&mut self) -> Result<Spanned<Redirect>> {
@@ -335,10 +363,12 @@ impl<'a> Lexer<'a> {
         for token in &tokens {
             span = span.merged(token.span);
         }
-        if self.peek() != Some(')') {
+
+        if self.peek() == Some(')') {
+            span = span.merged(self.eat([')']));
+        } else if !self.recover_error {
             return Err(Error::UnbalancedSubstitution { span });
         }
-        span = span.merged(self.eat([')']));
 
         self.substitution_level -= 1;
 
@@ -352,10 +382,11 @@ impl<'a> Lexer<'a> {
                 span = span.merged(self.eat(['$', '{']));
                 let varname = self.next_ascii_word()?;
                 span = span.merged(varname.span);
-                if self.peek() != Some('}') {
+                if self.peek() == Some('}') {
+                    span = span.merged(self.eat(['}']));
+                } else if !self.recover_error {
                     return Err(Error::UnbalancedEnvVarBrace { span });
                 }
-                span = span.merged(self.eat(['}']));
                 varname.data
             }
             ['$', ..] => {
@@ -620,6 +651,14 @@ mod tests {
 
     fn tokenize_str(s: &str) -> Vec<Token> {
         Lexer::new(&s.chars().collect_vec())
+            .tokenize()
+            .expect("should parse")
+    }
+
+    fn tokenize_error_str(s: &str) -> Vec<Token> {
+        Lexer::new(&s.chars().collect_vec())
+            .recover_error(true)
+            .normalize(false)
             .tokenize()
             .expect("should parse")
     }
@@ -951,6 +990,25 @@ mod tests {
             tok!(8..9, atom '-'),
             tok!(9..10, atom 'l'),
         ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn recover_error() {
+        let tokens = tokenize_error_str("ls $(echo ");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..10, atom st [
+                tok!(5..6, atom 'e'),
+                tok!(6..7, atom 'c'),
+                tok!(7..8, atom 'h'),
+                tok!(8..9, atom 'o'),
+                tok!(9..10, argd),
+            ]),
+        ];
+
         assert_eq!(tokens, expected);
     }
 }

@@ -1,4 +1,4 @@
-use crate::span::{Span, Spanned};
+use crate::span::Spanned;
 
 pub type TokenBase<A> = Spanned<TokenKindBase<A>>;
 
