@@ -398,13 +398,13 @@ impl PromptWriter for Prompt {
         // FIXME: change face according to the previous exit status
         let face = if true { "('-')/" } else { "(-_-)/" };
 
+        let esc_cwd = format!("\x1b]9;9;{}\x1b\\", env::current_dir()?.display());
+
         write!(
             out,
-            "{time} {whoami}:{path}\n{face} > ",
-            time = time,
+            "{esc_cwd}{time} {whoami}:{path}\n{face} > ",
             whoami = format!("{}@{}", username, computername).green(),
             path = path.blue(),
-            face = face
         )?;
         out.flush()?;
 
