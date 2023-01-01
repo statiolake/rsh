@@ -1,6 +1,6 @@
 use super::{Executable, Exit, ReadIntoStdio, WriteIntoStdio};
 use crate::shell::ShellState;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::env::{set_current_dir, set_var};
 use which::which;
 
@@ -54,12 +54,20 @@ impl Executable for CmdCd {
         _stdout: Box<dyn WriteIntoStdio>,
         mut stderr: Box<dyn WriteIntoStdio>,
     ) -> Result<Exit> {
-        if self.0.len() != 1 {
-            writeln!(stderr, "cd: requires exact one argument")?;
+        if self.0.len() > 1 {
+            writeln!(stderr, "cd: requires zero or one argument")?;
             return Ok(Exit::Failure);
         }
 
-        set_current_dir(&self.0[0])?;
+        let target = match self.0.get(0) {
+            Some(target) => target.to_string(),
+            None => dirs::home_dir()
+                .ok_or_else(|| anyhow!("failed to get home directory"))?
+                .display()
+                .to_string(),
+        };
+
+        set_current_dir(target)?;
         Ok(Exit::Success)
     }
 }
