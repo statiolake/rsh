@@ -1,7 +1,10 @@
 use super::{Executable, Exit, ReadIntoStdio, WriteIntoStdio};
 use crate::shell::ShellState;
 use anyhow::{anyhow, Result};
-use std::env::{set_current_dir, set_var};
+use std::{
+    env::{current_dir, set_current_dir, set_var},
+    path::PathBuf,
+};
 use which::which;
 
 pub fn find(cmd: &str, args: Vec<String>) -> Option<Box<dyn Executable>> {
@@ -49,25 +52,24 @@ impl Executable for CmdCd {
 
     fn execute(
         &mut self,
-        _state: &mut ShellState,
+        state: &mut ShellState,
         _stdin: Box<dyn ReadIntoStdio>,
         _stdout: Box<dyn WriteIntoStdio>,
-        mut stderr: Box<dyn WriteIntoStdio>,
+        _stderr: Box<dyn WriteIntoStdio>,
     ) -> Result<Exit> {
-        if self.0.len() > 1 {
-            writeln!(stderr, "cd: requires zero or one argument")?;
-            return Ok(Exit::Failure);
-        }
-
-        let target = match self.0.get(0) {
-            Some(target) => target.to_string(),
-            None => dirs::home_dir()
-                .ok_or_else(|| anyhow!("failed to get home directory"))?
-                .display()
-                .to_string(),
+        let target = match self.0.get(0).map(|s| &**s) {
+            Some("--") => PathBuf::from(self.0.get(1).ok_or_else(|| anyhow!("empty argument"))?),
+            Some("-") => state
+                .last_working_dir
+                .take()
+                .ok_or_else(|| anyhow!("no previous working directory"))?,
+            Some(target) => PathBuf::from(target),
+            None => dirs::home_dir().ok_or_else(|| anyhow!("failed to get home directory"))?,
         };
 
+        state.last_working_dir = Some(current_dir()?);
         set_current_dir(target)?;
+
         Ok(Exit::Success)
     }
 }

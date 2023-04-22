@@ -32,6 +32,7 @@ pub struct Shell {
 #[derive(Debug, Clone)]
 pub struct ShellState {
     pub loop_running: bool,
+    pub last_working_dir: Option<PathBuf>,
 }
 
 impl Shell {
@@ -87,6 +88,7 @@ impl ShellState {
     pub fn new() -> Result<ShellState> {
         Ok(Self {
             loop_running: false,
+            last_working_dir: None,
         })
     }
 
