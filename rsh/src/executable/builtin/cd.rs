@@ -1,7 +1,4 @@
-use std::{
-    env::{current_dir, set_current_dir},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use crate::{
     executable::{Executable, Exit, ReadIntoStdio, WriteIntoStdio},
@@ -40,8 +37,7 @@ impl Executable for CmdCd {
             None => dirs::home_dir().ok_or_else(|| anyhow!("failed to get home directory"))?,
         };
 
-        state.last_working_dir = Some(current_dir()?);
-        set_current_dir(target)?;
+        state.chdir(target)?;
 
         Ok(Exit::Success)
     }

@@ -1,5 +1,8 @@
-use crate::executable::{Exit, ReadIntoStdio, WriteIntoStdio};
 use crate::{conmode::ConsoleModeKeeper, executable::resolve_executable};
+use crate::{
+    executable::{Exit, ReadIntoStdio, WriteIntoStdio},
+    view::beautify_path,
+};
 use anyhow::anyhow;
 use anyhow::Result;
 use itertools::Itertools;
@@ -14,12 +17,12 @@ use rsh_line_parser::{
     token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind},
 };
 use same_file::is_same_file;
-use std::fmt::Display;
-use std::fs::File;
 use std::io::prelude::*;
-use std::path::{Path, PathBuf, MAIN_SEPARATOR};
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::{env, thread::JoinHandle};
+use std::{env::current_dir, fmt::Display};
+use std::{env::set_current_dir, fs::File};
 
 const HISTORY_FILE: &str = ".rsh_history";
 
@@ -33,6 +36,7 @@ pub struct Shell {
 pub struct ShellState {
     pub loop_running: bool,
     pub last_working_dir: Option<PathBuf>,
+    pub pushd_stack: Vec<PathBuf>,
 }
 
 impl Shell {
@@ -89,6 +93,7 @@ impl ShellState {
         Ok(Self {
             loop_running: false,
             last_working_dir: None,
+            pushd_stack: vec![],
         })
     }
 
@@ -107,6 +112,14 @@ impl ShellState {
 
     pub fn var(&self, name: &str) -> Option<String> {
         env::var(name).ok()
+    }
+
+    pub fn chdir<P: AsRef<Path>>(&mut self, target: P) -> Result<()> {
+        let target = target.as_ref();
+        let cwd = env::current_dir()?;
+        self.last_working_dir = Some(cwd);
+        set_current_dir(target)?;
+        Ok(())
     }
 }
 
@@ -396,7 +409,7 @@ impl PromptWriter for Prompt {
         let time = now.format("%H:%M:%S");
         let username = whoami::username();
         let computername = whoami::hostname();
-        let path = current_dir()?;
+        let path = beautify_path(current_dir()?)?;
         // FIXME: change face according to the previous exit status
         let face = if true { "('-')/" } else { "(-_-)/" };
 
@@ -412,17 +425,4 @@ impl PromptWriter for Prompt {
 
         Ok(())
     }
-}
-
-fn current_dir() -> Result<String> {
-    let path = env::current_dir()?;
-    let home = match dirs::home_dir() {
-        Some(home) => home,
-        None => return Ok(path.to_string_lossy().into_owned()),
-    };
-    Ok(match path.strip_prefix(home) {
-        Ok(under_home) if under_home.as_os_str().is_empty() => "~".to_string(),
-        Ok(under_home) => format!("~{}{}", MAIN_SEPARATOR, under_home.display()),
-        Err(_) => path.to_string_lossy().into_owned(),
-    })
 }
