@@ -153,6 +153,22 @@ impl<'a> Lexer<'a> {
     ///
     /// At first lowering the command line text will be `echo $(ls)`, but it's not substitution
     /// invocation here. Much like `echo '$(ls)'`.
+    ///
+    /// The `delim` option is to handle substitution $() differently according to its position, in
+    /// plain command line or in double quote. Normally the substituted output is broke into
+    /// multiple arguments at the whitespace characters. However, in double quotes, the substituted
+    /// output should not delimited by whitespace characters.
+    ///
+    /// For example, if show_args is a program just showing its arguments:
+    /// ```console
+    /// > show_args $(echo 'hello world')
+    /// 0: show_args
+    /// 1: hello
+    /// 2: world
+    /// > show_args "$(echo 'hello world')"
+    /// 0: show_args
+    /// 1: hello world
+    /// ```
     pub fn tokenize_substitution<A: AtomTokenizable>(
         &mut self,
         delim: bool,
