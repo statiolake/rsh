@@ -1,2 +1,2 @@
 [workspace]
-members = ["rsh-line-parser", "rsh", "rsh-line-editor"]
+members = ["rsh", "rsh-line-parser", "rsh-line-editor"]
