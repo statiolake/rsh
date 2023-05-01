@@ -8,13 +8,13 @@ use anyhow::Result;
 use itertools::Itertools;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use rsh_line_parser::{
-    lexer::{normalize_tokens, Lexer, ESCAPE_CHAR},
+    lexer::{normalize_flattened_tokens, Lexer, ESCAPE_CHAR},
     parser::{
         parse_command_line, CommandLine, IOSpec, PipeCommand, StderrDestination, StdinSource,
         StdoutDestination,
     },
     span::Span,
-    token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind},
+    token::{Atom, FlattenedToken, Token, TokenKind},
 };
 use same_file::is_same_file;
 use std::io::prelude::*;
@@ -68,12 +68,12 @@ impl Shell {
         let cmdline = self.read_line()?;
         let tokens = Lexer::new(&cmdline.chars().collect_vec()).tokenize()?;
 
-        if tokens.is_empty() {
+        if tokens.data.is_empty() {
             return Ok(());
         }
 
         let _keeper = ConsoleModeKeeper::new()?;
-        self.state.run(tokens)
+        self.state.run(tokens.data)
     }
 
     fn read_line(&mut self) -> Result<String> {
@@ -154,9 +154,9 @@ fn flatten(
 ) -> Result<Vec<FlattenedToken>> {
     let mut res = vec![];
     for token in tokens {
-        res.extend(flatten_token(state, token, iospec.clone())?);
+        res.extend(flatten_token(state, token, Some(iospec.clone()))?);
     }
-    normalize_tokens(&mut res);
+    normalize_flattened_tokens(&mut res);
 
     Ok(res)
 }
@@ -164,7 +164,7 @@ fn flatten(
 fn flatten_token(
     state: &mut ShellState,
     token: Token,
-    iospec: IOSpec,
+    iospec: Option<IOSpec>,
 ) -> Result<Vec<FlattenedToken>> {
     let mut res = vec![];
 
@@ -173,19 +173,17 @@ fn flatten_token(
     match token.data {
         TokenKind::Atom(atom) => res.extend(flatten_atom(state, span, atom, false, iospec)?),
         TokenKind::SingleQuoted(q) => {
-            q.0.into_iter()
-                .for_each(|ch| res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch))))
+            q.0.data
+                .into_iter()
+                .for_each(|ch| res.push(FlattenedToken::Atom(ch.data)))
         }
-        TokenKind::DoubleQuoted(q) => q.0.into_iter().try_for_each(|atom| {
+        TokenKind::DoubleQuoted(q) => q.0.data.into_iter().try_for_each(|atom| {
             flatten_atom(state, span, atom, true, iospec.clone()).map(|t| res.extend(t))
         })?,
-        TokenKind::ArgDelim => res.push(FlattenedToken::new(span, FlattenedTokenKind::ArgDelim)),
-        TokenKind::Redirect(redir) => res.push(FlattenedToken::new(
-            span,
-            FlattenedTokenKind::Redirect(redir),
-        )),
-        TokenKind::Pipe => res.push(FlattenedToken::new(span, FlattenedTokenKind::Pipe)),
-        TokenKind::Delim => res.push(FlattenedToken::new(span, FlattenedTokenKind::Delim)),
+        TokenKind::ArgDelim => res.push(FlattenedToken::ArgDelim),
+        TokenKind::Redirect(redir) => res.push(FlattenedToken::Redirect(redir)),
+        TokenKind::Pipe => res.push(FlattenedToken::Pipe),
+        TokenKind::Delim => res.push(FlattenedToken::Delim),
     }
 
     Ok(res)
@@ -194,33 +192,38 @@ fn flatten_token(
 fn flatten_atom(
     state: &mut ShellState,
     span: Span,
-    atom: AtomKind,
+    atom: Atom,
     in_double_quote: bool,
-    iospec: IOSpec,
+    iospec: Option<IOSpec>,
 ) -> Result<Vec<FlattenedToken>> {
     let mut res = vec![];
 
     match atom {
-        AtomKind::Char(ch) => res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch))),
-        AtomKind::EnvVar(env_var) => state
-            .var(&env_var.0)
-            .unwrap_or_default()
-            .chars()
-            .for_each(|ch| res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch)))),
-        AtomKind::Substitution(st) => {
+        Atom::Char(ch) => res.push(FlattenedToken::Atom(ch.data)),
+        Atom::EnvVar(env_var) => {
+            let var_name: String = env_var.0.data.iter().map(|ch| ch.data).collect();
+            state
+                .var(&var_name)
+                .unwrap_or_default()
+                .chars()
+                .for_each(|ch| res.push(FlattenedToken::Atom(ch)))
+        }
+        Atom::Substitution(st) => {
+            // When iospec is None means we know substitution never occurs. However it occured ---
+            // that's a bug.
             let iospec = IOSpec {
                 stdout: StdoutDestination::Capture,
-                ..iospec
+                ..iospec.expect("internal error: disabled substitution occured")
             };
 
-            let output = run_tokens(state, st.0, iospec)?
+            let output = run_tokens(state, st.0.data, iospec)?
                 .stdout
                 .expect("internal error: cannot access captured stdout");
 
             Lexer::new(&output.chars().collect_vec())
                 .tokenize_substitution(!in_double_quote)?
                 .into_iter()
-                .for_each(|token| res.push(token));
+                .for_each(|token| res.extend(flatten_token(state, token, None).unwrap()));
         }
     }
 

@@ -1,336 +1,231 @@
+use rsh_line_parser::{
+    lexer::Lexer,
+    span::Spanned,
+    token::{Atom, Token, TokenKind, TokenList},
+};
+
+use self::completer::{
+    Completer, CompletionResult, EnvVarCompleter, ExecutableCompleter, PathCompleter,
+};
 use crate::Result;
 use crate::{LineBuffer, LinePrinter};
-use std::borrow::Cow;
-use std::fs::read_dir;
-use std::path::{Path, MAIN_SEPARATOR};
 
-struct CompletePositionContext {
-    start: Option<usize>,
-    in_single: bool,
-    in_double: bool,
-    escaped: bool,
-}
+mod completer;
 
-impl CompletePositionContext {
-    pub fn new() -> Self {
-        Self {
-            start: Some(0),
-            in_single: false,
-            in_double: false,
-            escaped: false,
-        }
-    }
-}
+pub fn handle_completion<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer) -> Result<()> {
+    let before_cursor = &buf.buf[..buf.cursor_at];
+    let tokens = Lexer::new(before_cursor)
+        .recover_error(true)
+        .tokenize()
+        .unwrap_or_else(|e| panic!("internal error: lexer error not recovered: {}", e));
 
-pub fn handle_completion<P>(
-    printer: &mut LinePrinter<P>,
-    buf: &mut LineBuffer,
-    escape_char: Option<char>,
-) -> Result<()> {
-    let end = buf.cursor_at;
-
-    // check quotation first; is this argument quoted?
-    let ctx =
-        buf.chars()
-            .enumerate()
-            .take(end)
-            .fold(CompletePositionContext::new(), |ctx, (pos, ch)| {
-                match (ctx, ch) {
-                    // Erroneous ctx
-                    (
-                        CompletePositionContext {
-                            in_single: true,
-                            in_double: true,
-                            ..
-                        },
-                        _,
-                    ) => {
-                        unreachable!("internal error: both single- and double-quoted")
-                    }
-
-                    (
-                        CompletePositionContext {
-                            in_single: true,
-                            escaped: true,
-                            ..
-                        },
-                        _,
-                    ) => {
-                        unreachable!("internal error: both single-quoted and escaped")
-                    }
-
-                    // Escape: should be treated only when non-single quoted string.
-                    (ctx @ CompletePositionContext { escaped: true, .. }, _) => {
-                        CompletePositionContext {
-                            escaped: false,
-                            ..ctx
-                        }
-                    }
-                    (
-                        ctx @ CompletePositionContext {
-                            in_single: false,
-                            escaped: false,
-                            ..
-                        },
-                        ch,
-                    ) if Some(ch) == escape_char => CompletePositionContext {
-                        escaped: true,
-                        ..ctx
-                    },
-
-                    // Close quotation
-                    (
-                        ctx @ CompletePositionContext {
-                            in_single: true,
-                            in_double: false,
-                            ..
-                        },
-                        '\'',
-                    ) => CompletePositionContext {
-                        start: None,
-                        in_single: false,
-                        ..ctx
-                    },
-                    (
-                        ctx @ CompletePositionContext {
-                            in_single: false,
-                            in_double: true,
-                            ..
-                        },
-                        '"',
-                    ) => CompletePositionContext {
-                        start: None,
-                        in_double: false,
-                        ..ctx
-                    },
-
-                    // Start quotation; this position is important. Next to the quote is start of argument.
-                    (
-                        ctx @ CompletePositionContext {
-                            in_single: false,
-                            in_double: false,
-                            ..
-                        },
-                        '\'',
-                    ) => CompletePositionContext {
-                        start: Some(pos + 1),
-                        in_single: true,
-                        ..ctx
-                    },
-                    (
-                        ctx @ CompletePositionContext {
-                            in_single: false,
-                            in_double: false,
-                            ..
-                        },
-                        '"',
-                    ) => CompletePositionContext {
-                        start: Some(pos + 1),
-                        in_double: true,
-                        ..ctx
-                    },
-
-                    // Unescaped whitespace characters; argument changed. Update position.
-                    (
-                        ctx @ CompletePositionContext {
-                            in_single: false,
-                            in_double: false,
-                            escaped: false,
-                            ..
-                        },
-                        ' ',
-                    ) => CompletePositionContext {
-                        start: Some(pos + 1),
-                        ..ctx
-                    },
-
-                    // Any other characters
-                    (ctx, _) => ctx,
-                }
-            });
-
-    let start = match ctx.start {
-        Some(start) => start,
-        None => return Ok(()),
+    let Some(res) = find_completer(buf, &tokens).map(|completer| completer.complete()) else {
+        return Ok(());
     };
 
-    assert!(start <= end);
-    let entire = buf.chars().take(end).collect::<String>();
-    let mut arg = buf
-        .chars()
-        .skip(start)
-        .take(end - start)
-        .collect::<String>();
-
-    if !ctx.in_single {
-        // Replace escaped chars
-        let mut escaped = false;
-        arg = arg
-            .chars()
-            .flat_map(|ch| match ch {
-                ch if escaped => {
-                    escaped = false;
-                    Some(ch)
-                }
-                ch if !escaped && Some(ch) == escape_char => {
-                    escaped = true;
-                    None
-                }
-                ch => Some(ch),
-            })
-            .collect();
-    }
-
-    printer.set_hints(vec![
-        format!(
-            "start: {}, end: {}, entire: {}, arg: {}",
-            start, end, entire, arg
-        ),
-        format!("in_single: {}", ctx.in_single),
-        format!("in_double: {}", ctx.in_double),
-    ]);
-
-    run_completor(printer, buf, &ctx, &entire, &arg, escape_char)
-}
-
-fn run_completor<P>(
-    printer: &mut LinePrinter<P>,
-    buf: &mut LineBuffer,
-    ctx: &CompletePositionContext,
-    _entire: &str,
-    arg: &str,
-    escape_char: Option<char>,
-) -> Result<()> {
-    // Clear previous hint text
-    printer.set_hints(Vec::new());
-
-    // TODO: Support other completor
-    file_completor(printer, buf, ctx, arg, escape_char)
-}
-
-fn file_completor<P>(
-    printer: &mut LinePrinter<P>,
-    buf: &mut LineBuffer,
-    ctx: &CompletePositionContext,
-    arg: &str,
-    escape_char: Option<char>,
-) -> Result<()> {
-    let start = match ctx.start {
-        Some(start) => start,
-        None => return Ok(()),
-    };
-
-    // Parse arg as a path
-    let path = Path::new(arg);
-    let (file_name, parent) = if arg.ends_with(MAIN_SEPARATOR) {
-        (Cow::from(""), path)
-    } else {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .unwrap_or_else(|| Cow::from(""));
-        (name, path.parent().unwrap_or_else(|| Path::new(".")))
-    };
-
-    let entries = match read_dir(parent) {
-        Ok(entries) => entries,
-        Err(_) => return Ok(()),
-    };
-    let entries: Vec<_> = entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry
-                .path()
-                .file_name()
-                .map(|name| {
-                    name.to_string_lossy()
-                        .to_lowercase()
-                        .starts_with(&*file_name.to_lowercase())
-                })
-                .unwrap_or(false)
-        })
-        .collect();
-
-    if entries.is_empty() {
-        printer.set_hints(vec!["no matching path found".to_string()]);
-    } else if entries.len() == 1 {
-        // Unique entry; complete it.
-        let entry = &entries[0];
-        let mut entry_str = entry.path().display().to_string();
-        if !ctx.in_double && !ctx.in_single {
-            if let Some(escape_char) = escape_char {
-                let escape = |ch| format!("{}{}", escape_char, ch);
-                entry_str = entry_str
-                    .replace(escape_char, &escape(escape_char))
-                    .replace(' ', &escape(' '))
-                    .replace('(', &escape('('))
-                    .replace(')', &escape(')'))
-                    .replace('<', &escape('<'))
-                    .replace('>', &escape('>'));
-            }
+    match res {
+        CompletionResult::Sole { span, replace_to } => buf.replace_span(span, replace_to.chars()),
+        CompletionResult::Partial {
+            partial_span,
+            partially_replace_to,
+            candidates,
+        } => {
+            buf.replace_span(partial_span, partially_replace_to.chars());
+            printer.set_hints(candidates);
         }
-
-        buf.replace_range(start..buf.cursor_at, entry_str.chars());
-
-        if entry.path().is_dir() {
-            // Insert path separator after name if directory
-            buf.insert_norecord(MAIN_SEPARATOR);
-        } else {
-            // Insert whitespace otherwise; close the quote if necessary.
-            if ctx.in_single || ctx.in_double {
-                let quote = if ctx.in_single { '\'' } else { '"' };
-                if buf.char_at(buf.cursor_at) == Some(quote) {
-                    // Go out of quote
-                    buf.move_right(1);
-                } else {
-                    // Close this quote
-                    buf.insert_norecord(quote);
-                }
-            }
-            // Insert whitespace
-            buf.insert_norecord(' ');
-        }
-    } else {
-        // Set list of file names
-        let entries: Vec<_> = entries
-            .into_iter()
-            .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .collect();
-        printer.set_hints(printer.format_hint_grid(&entries));
-
-        // Compute common prefix
-        fn common_prefix<'a>(a: &'a str, b: &'a str) -> &'a str {
-            let idx = (0..=a.len().min(b.len()))
-                .rev()
-                .find(|&idx| a[..idx] == b[..idx])
-                .expect("internal error: even empty string is not equal");
-            &a[..idx]
-        }
-
-        // Insert **lower case** common prefix.
-        let entries: Vec<_> = entries.iter().map(|s| s.to_lowercase()).collect();
-        let mut iter = entries.iter();
-        let first = iter.next().expect("internal error: entries is empty");
-        let prefix = iter.fold(&**first, |prefix, next| common_prefix(prefix, next));
-        let mut completion = if parent != Path::new(".") {
-            parent.join(prefix).display().to_string()
-        } else {
-            prefix.to_string()
-        };
-        if !ctx.in_double && !ctx.in_single {
-            if let Some(escape_char) = escape_char {
-                let escape = |ch| format!("{}{}", escape_char, ch);
-                completion = completion
-                    .replace(escape_char, &escape(escape_char))
-                    .replace(' ', &escape(' '))
-                    .replace('(', &escape('('))
-                    .replace(')', &escape(')'))
-                    .replace('<', &escape('<'))
-                    .replace('>', &escape('>'));
-            }
-        }
-        buf.replace_range(start..buf.cursor_at, completion.chars());
     }
 
     Ok(())
+}
+
+/// Find appropriate completer from all tokens before cursor.
+///
+/// For example:
+///
+/// ```console
+/// > check_complete foo ba|r        # Case 1
+/// (PathCompleter) target: ba
+/// > check_complete 'foo ba|r'      # Case 2
+/// (PathCompleter) target: foo ba
+/// > check_complete ${ENV_|V}       # Case 3
+/// (EnvVarCompleter) target: ENV_
+/// > check_complete $(ls worl|d)    # Case 4
+/// (PathCompleter) target: worl
+/// > check_compl|
+/// (ExecutableCompletor) target: check_compl
+/// ```
+///
+fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn Completer + 'b>> {
+    let tokens = extract_delim_splitted_last_tokens(tokens);
+
+    // Basically we want to check the last token to determine the kind of completion.
+    let Some(last_token) = tokens.data.last()
+        else {
+        // If tokens are empty, command line is empty. Just complete all executables.
+        let span = tokens.span;
+
+        return Some(Box::new(ExecutableCompleter {
+                buf,
+            target: Spanned::new(span, vec![]),
+            in_double: false,
+            in_single: false,
+        }))
+    };
+
+    match &last_token.data {
+        TokenKind::Atom(Atom::Substitution(subst)) => {
+            // If the cursor is inside a substitution (Case 4), enter to the inner substitution and
+            // complete there.
+            find_completer(buf, &subst.0)
+        }
+        TokenKind::Atom(Atom::EnvVar(env_var)) => {
+            // If the cursor is inside an environment variable name (Case 3), complete a variable
+            // name.
+            let target: Spanned<Vec<Atom>> = Spanned::new(
+                env_var.0.span,
+                env_var.0.data.iter().map(|ch| Atom::Char(*ch)).collect(),
+            );
+            Some(Box::new(EnvVarCompleter { buf, target }) as _)
+        }
+        TokenKind::SingleQuoted(sq) => {
+            // target are the string inside single quotes.
+            let target = Spanned::new(
+                sq.0.span,
+                sq.0.data.iter().map(|ch| Atom::Char(*ch)).collect(),
+            );
+
+            // If the cursor is inside a single quoted string, complete executable name if it is
+            // first argument (it is when no ArgDelim found). Otherwise complete a file path.
+            let has_arg_delim = tokens.data.iter().any(|tok| tok.data.arg_delim().is_some());
+            if has_arg_delim {
+                Some(Box::new(PathCompleter {
+                    buf,
+                    target,
+                    in_single: true,
+                    in_double: false,
+                }) as _)
+            } else {
+                Some(Box::new(ExecutableCompleter {
+                    buf,
+                    target,
+                    in_single: true,
+                    in_double: false,
+                }) as _)
+            }
+        }
+        TokenKind::DoubleQuoted(dq) => {
+            // target are the atoms inside double quotes.
+            let target = dq.0.clone();
+
+            // If the cursor is inside a double quoted string, complete executable name if it is
+            // first argument (it is when no ArgDelim found). Otherwise complete a file path.
+            let has_arg_delim = tokens.data.iter().any(|tok| tok.data.arg_delim().is_some());
+            if has_arg_delim {
+                Some(Box::new(PathCompleter {
+                    buf,
+                    target,
+                    in_single: false,
+                    in_double: true,
+                }) as _)
+            } else {
+                Some(Box::new(ExecutableCompleter {
+                    buf,
+                    target,
+                    in_single: false,
+                    in_double: true,
+                }) as _)
+            }
+        }
+        TokenKind::ArgDelim | TokenKind::Redirect(_) => {
+            // If the cursor is after the delimiter (or redirect), complete paths.
+            // TODO: support command line argument custom completion?
+            Some(Box::new(PathCompleter {
+                buf,
+                target: Spanned::new(last_token.span.end_point(), vec![]),
+                in_single: false,
+                in_double: false,
+            }) as _)
+        }
+        TokenKind::Pipe => {
+            // If the cursor is after the pipe, complete executable.
+            Some(Box::new(ExecutableCompleter {
+                buf,
+                target: Spanned::new(last_token.span.end_point(), vec![]),
+                in_single: false,
+                in_double: false,
+            }) as _)
+        }
+        TokenKind::Delim => {
+            panic!("internal error: Delim found inside Delim-splitted element");
+        }
+        _ => {
+            // Otherwise, We need to extract last atom sequence and determine appropriate completion
+            // kind.
+            let target = {
+                let mut target_atoms = vec![];
+                let mut spans = vec![];
+                for tok in tokens.data.iter().rev() {
+                    let Spanned { span, data: TokenKind::Atom(atom) } = tok else {
+                        break;
+                    };
+
+                    target_atoms.push(atom.clone());
+                    spans.push(*span);
+                }
+
+                target_atoms.reverse();
+                spans.reverse();
+                let target_span = spans
+                    .iter()
+                    .fold(spans[0].start_point(), |sum, span| sum.merged(*span));
+                Spanned::new(target_span, target_atoms)
+            };
+
+            // If there is no ArgDelim, it should be executable completion.
+            let is_executable_completion =
+                tokens.data.iter().all(|tok| tok.data.arg_delim().is_none());
+
+            if is_executable_completion {
+                Some(Box::new(ExecutableCompleter {
+                    buf,
+                    target,
+                    in_single: false,
+                    in_double: false,
+                }) as _)
+            } else {
+                Some(Box::new(PathCompleter {
+                    buf,
+                    target,
+                    in_single: false,
+                    in_double: false,
+                }))
+            }
+        }
+    }
+}
+
+/// Extracts the last component splitted by Delim. This function returns the same content if there
+/// is no Delim.
+fn extract_delim_splitted_last_tokens(tokens: &Spanned<Vec<Token>>) -> Spanned<Vec<Token>> {
+    let is_delim = |tok: &Token| tok.data.delim().is_some();
+
+    // Find the last component. Note that rsplit() never returns an empty iterator; even if there is
+    // no Delims in tokens, rsplit() returns a iterator producing the single original content.
+    let last_tokens = tokens.data.rsplit(is_delim).next().unwrap();
+
+    // Compute the span.
+    let last_tokens_span = if !last_tokens.is_empty() {
+        let init = last_tokens[0].span.start_point();
+        last_tokens.iter().fold(init, |s, t| s.merged(t.span))
+    } else {
+        // Find the delimiting Delim span or starting point of this tokens.
+        tokens
+            .data
+            .iter()
+            .rfind(|t| is_delim(t))
+            .map(|t| t.span.end_point())
+            .unwrap_or(tokens.span.start_point())
+    };
+
+    Spanned::new(last_tokens_span, last_tokens.to_vec())
 }

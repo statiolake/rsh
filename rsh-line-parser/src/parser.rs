@@ -1,4 +1,6 @@
-use crate::token::{DoubleQuoted, FlattenedToken, FlattenedTokenKind, SingleQuoted};
+use crate::token::{
+    DoubleQuoted, FlattenedQuoted, FlattenedToken, FlattenedTokenKind, SingleQuoted,
+};
 use itertools::Itertools;
 use std::path::PathBuf;
 
@@ -70,7 +72,7 @@ pub fn parse_command_line(
     default_iospec: IOSpec,
 ) -> Result<CommandLine> {
     let delimited = tokens
-        .split(|tok| tok.data == FlattenedTokenKind::Delim)
+        .split(|tok| *tok == FlattenedTokenKind::Delim)
         .map(|tokens| parse_piped_command(tokens, default_iospec.clone()))
         .collect::<Result<Vec<_>>>()?;
     Ok(CommandLine {
@@ -84,7 +86,7 @@ pub fn parse_piped_command(
 ) -> Result<PipeCommand> {
     let mut components = vec![];
     let cmds_toks = tokens
-        .split(|tok| tok.data == FlattenedTokenKind::Pipe)
+        .split(|tok| *tok == FlattenedTokenKind::Pipe)
         .collect_vec();
     let len = cmds_toks.len();
     for (idx, cmd_toks) in cmds_toks.into_iter().enumerate() {
@@ -112,12 +114,12 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
     let mut iospec = default_iospec;
     let mut args = vec![];
 
-    for arg_toks in tokens.split(|tok| tok.data == FlattenedTokenKind::ArgDelim) {
+    for arg_toks in tokens.split(|tok| *tok == FlattenedTokenKind::ArgDelim) {
         if arg_toks.is_empty() {
             continue;
         }
 
-        if let FlattenedTokenKind::Redirect(redir) = &arg_toks[0].data {
+        if let FlattenedTokenKind::Redirect(redir) = &arg_toks[0] {
             // Process redirect
             if let Some(rrk) = redir.reference {
                 match (redir.kind, rrk) {
@@ -183,10 +185,9 @@ pub fn parse_command(tokens: &[FlattenedToken], default_iospec: IOSpec) -> Resul
 fn toks_to_string(toks: &[FlattenedToken]) -> String {
     let mut arg = String::new();
     for tok in toks {
-        match &tok.data {
+        match &tok {
             FlattenedTokenKind::Atom(a) => arg.push(*a),
-            FlattenedTokenKind::SingleQuoted(SingleQuoted(q))
-            | FlattenedTokenKind::DoubleQuoted(DoubleQuoted(q)) => arg.extend(q.iter().copied()),
+            FlattenedTokenKind::Quoted(FlattenedQuoted(q)) => arg.extend(q.iter().map(|ch| ch)),
             e => panic!("internal error: invalid token kind `{:?}` is in args", e),
         }
     }

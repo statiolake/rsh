@@ -18,6 +18,20 @@ impl Span {
             end: other.end,
         }
     }
+
+    pub fn start_point(self) -> Span {
+        Self {
+            start: self.start,
+            end: self.start,
+        }
+    }
+
+    pub fn end_point(self) -> Span {
+        Self {
+            start: self.end,
+            end: self.end,
+        }
+    }
 }
 
 impl From<Range<usize>> for Span {

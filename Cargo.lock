@@ -575,6 +575,8 @@ dependencies = [
  "anyhow",
  "crossterm",
  "itertools",
+ "rsh-line-parser",
+ "scopefunc",
  "thiserror",
  "unicode-width",
 ]
@@ -597,6 +599,12 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "scopefunc"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9838d301b3e33c11a49b76bebb6efbd712f4e0db80dbfc47e767e69ec66aa762"
 
 [[package]]
 name = "scopeguard"

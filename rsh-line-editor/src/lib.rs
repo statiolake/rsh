@@ -8,11 +8,11 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{size as term_size, Clear, ClearType};
 use itertools::Itertools;
+use rsh_line_parser::span::Span;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Write as _};
 use std::io::{self, StdoutLock, Write};
 use std::mem::take;
-use std::ops::RangeBounds;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod completion;
@@ -66,9 +66,7 @@ impl LineEditor {
         printer.print_prompt()?;
         loop {
             if let Event::Key(key) = read()? {
-                if let Some(input) =
-                    handle_key(key, &mut printer, &mut buf, &mut history, self.escape_char)?
-                {
+                if let Some(input) = handle_key(key, &mut printer, &mut buf, &mut history)? {
                     return Ok(input);
                 }
             }
@@ -85,7 +83,6 @@ fn handle_key<P: PromptWriter>(
     printer: &mut LinePrinter<P>,
     buf: &mut LineBuffer,
     history: &mut History,
-    escape_char: Option<char>,
 ) -> Result<Option<UserInput>, Error> {
     const CONTROL: KeyModifiers = KeyModifiers::CONTROL;
     const ALT: KeyModifiers = KeyModifiers::ALT;
@@ -106,7 +103,7 @@ fn handle_key<P: PromptWriter>(
         (KeyCode::Char('c'), CONTROL) | (KeyCode::Esc, _) => buf.clear(),
         (KeyCode::Backspace, _) => buf.backspace(),
         (KeyCode::Delete, _) => buf.delete(),
-        (KeyCode::Tab, _) => completion::handle_completion(printer, buf, escape_char)?,
+        (KeyCode::Tab, _) => completion::handle_completion(printer, buf)?,
         (KeyCode::Char('d'), CONTROL) => buf.delete(),
         (KeyCode::Char('b'), CONTROL) => buf.move_left(1),
         (KeyCode::Char('f'), CONTROL) => buf.move_right(1),
@@ -821,30 +818,19 @@ impl LineBuffer {
         self.buf.get(idx).copied()
     }
 
-    pub fn replace_range<R, I>(&mut self, range: R, new_chars: I)
+    pub fn replace_span<I>(&mut self, span: Span, new_chars: I)
     where
-        R: RangeBounds<usize>,
         I: IntoIterator<Item = char>,
     {
         self.record_history();
 
-        use std::ops::Bound::*;
-        let range_start = match range.start_bound() {
-            Included(&n) => n,
-            Excluded(&n) => n.saturating_sub(1),
-            Unbounded => 0,
-        };
-        let range_end = match range.end_bound() {
-            Included(&n) => n + 1,
-            Excluded(&n) => n,
-            Unbounded => 0,
-        };
+        let range = span.start..span.end;
 
         // Fix cursor position
         if range.contains(&self.cursor_at) {
-            self.cursor_at = range_start;
-        } else if self.cursor_at >= range_end {
-            self.cursor_at -= range_end - range_start;
+            self.cursor_at = span.start;
+        } else if self.cursor_at >= span.end {
+            self.cursor_at -= span.end - span.start;
         }
 
         // Remove string in specified range

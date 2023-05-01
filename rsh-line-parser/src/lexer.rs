@@ -1,8 +1,8 @@
 use crate::{
     span::{Span, Spanned},
     token::{
-        AtomKind, DoubleQuoted, EnvVar, Redirect, RedirectKind, RedirectReferenceKind,
-        SingleQuoted, Substitution, TokenBase, TokenKindBase,
+        Atom, DoubleQuoted, EnvVar, FlattenedToken, FlattenedTokenKind, HasTokenKind, Redirect,
+        RedirectKind, RedirectReferenceKind, SingleQuoted, Substitution, Token, TokenKind,
     },
 };
 
@@ -67,8 +67,8 @@ pub struct Lexer<'a> {
     /// Keep lexer running even when there's error
     recover_error: bool,
 
-    /// Do normalization
-    normalize: bool,
+    /// Strip whitespaces at the both end.
+    strip_delims: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -77,8 +77,8 @@ impl<'a> Lexer<'a> {
         self
     }
 
-    pub fn normalize(&mut self, value: bool) -> &mut Self {
-        self.normalize = value;
+    pub fn strip_delims(&mut self, value: bool) -> &mut Self {
+        self.strip_delims = value;
         self
     }
 
@@ -88,13 +88,14 @@ impl<'a> Lexer<'a> {
             current: 0,
             substitution_level: 0,
             recover_error: false,
-            normalize: true,
+            strip_delims: true,
         }
     }
 
-    pub fn tokenize<A: AtomTokenizable>(&mut self) -> Result<Vec<TokenBase<A>>> {
-        let mut tokens: Vec<TokenBase<A>> = Vec::new();
+    pub fn tokenize(&mut self) -> Result<Spanned<Vec<Token>>> {
+        let mut tokens: Vec<Token> = Vec::new();
 
+        let whole_span = self.span_for_current_point();
         while let Some(ch) = self.peek() {
             if self.substitution_level > 0 && ch == ')' {
                 // If tokenize in substitution, stop tokenizing at ')'.
@@ -102,36 +103,37 @@ impl<'a> Lexer<'a> {
             }
             tokens.push(self.next_token()?);
         }
+        let whole_span = tokens
+            .iter()
+            .fold(whole_span, |merged, tok| merged.merged(tok.span));
 
         // Normalize tokens
-        if self.normalize {
-            normalize_tokens(&mut tokens);
-        }
+        normalize_tokens(self.strip_delims, &mut tokens);
 
-        Ok(tokens)
+        Ok(Spanned::new(whole_span, tokens))
     }
 
-    pub fn next_token<A: AtomTokenizable>(&mut self) -> Result<TokenBase<A>> {
+    pub fn next_token(&mut self) -> Result<Token> {
         if let Some(span) = self.skip_whitespace() {
-            return Ok(TokenBase::new(span, TokenKindBase::ArgDelim));
+            return Ok(Token::new(span, TokenKind::ArgDelim));
         };
 
         match self.peek_rest() {
             [] => panic!("internal error: no token found"),
             [ESCAPE_CHAR, ..] => self
                 .next_escaped_sequence()
-                .map(|v| v.map(|ch| TokenKindBase::Atom(A::from(ch)))),
+                .map(|ch| Spanned::new(ch.span, TokenKind::Atom(Atom::from(ch)))),
             ['\'', ..] => self
                 .next_single_quoted()
-                .map(|v| v.map(|q| TokenKindBase::SingleQuoted(q))),
+                .map(|v| v.map(|q| TokenKind::SingleQuoted(q))),
             ['"', ..] => self
                 .next_double_quoted()
-                .map(|v| v.map(|q| TokenKindBase::DoubleQuoted(q))),
+                .map(|v| v.map(|q| TokenKind::DoubleQuoted(q))),
             ['>' | '<', ..] | ['1' | '2', '>', ..] => self
                 .next_redirect()
-                .map(|v| v.map(|r| TokenKindBase::Redirect(r))),
+                .map(|v| v.map(|r| TokenKind::Redirect(r))),
             ['|' | ';', ..] => self.next_delim(),
-            _ => A::tokenize_atom(self).map(|v| v.map(|a| TokenKindBase::Atom(a))),
+            _ => Atom::tokenize_atom(self).map(|v| v.map(|a| TokenKind::Atom(a))),
         }
     }
 
@@ -169,10 +171,7 @@ impl<'a> Lexer<'a> {
     /// 0: show_args
     /// 1: hello world
     /// ```
-    pub fn tokenize_substitution<A: AtomTokenizable>(
-        &mut self,
-        delim: bool,
-    ) -> Result<Vec<TokenBase<A>>> {
+    pub fn tokenize_substitution(&mut self, delim: bool) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
 
         while self.peek().is_some() {
@@ -182,65 +181,78 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    pub fn next_token_substitution<A: AtomTokenizable>(
-        &mut self,
-        delim: bool,
-    ) -> Result<TokenBase<A>> {
+    pub fn next_token_substitution(&mut self, delim: bool) -> Result<Token> {
         if delim {
             if let Some(span) = self.skip_whitespace() {
-                return Ok(TokenBase::new(span, TokenKindBase::ArgDelim));
+                return Ok(Token::new(span, TokenKind::ArgDelim));
             }
         }
 
         self.next_char()
-            .map(|tok| tok.map(|ch| TokenKindBase::Atom(A::from(ch))))
+            .map(|ch| Spanned::new(ch.span, TokenKind::Atom(Atom::from(ch))))
     }
 
     fn next_single_quoted(&mut self) -> Result<Spanned<SingleQuoted>> {
-        let mut span = self.eat(['\'']);
-        let mut chars = Vec::new();
+        let mut whole_span = self.eat(['\'']);
+        let mut inner_span = self.span_for_current_point();
+        let mut chars = vec![];
         while let Some(ch) = self.peek() {
             match ch {
                 '\'' => {
-                    span = span.merged(self.eat([ch]));
-                    return Ok(Spanned::new(span, SingleQuoted(chars)));
+                    whole_span = whole_span.merged(self.eat([ch]));
+                    return Ok(Spanned::new(
+                        whole_span,
+                        SingleQuoted(Spanned::new(inner_span, chars)),
+                    ));
                 }
                 _ => {
                     let ch = self.next_char()?;
-                    span = span.merged(ch.span);
-                    chars.push(ch.data);
+                    whole_span = whole_span.merged(ch.span);
+                    inner_span = inner_span.merged(ch.span);
+                    chars.push(ch);
                 }
             }
         }
 
         if self.recover_error {
-            Ok(Spanned::new(span, SingleQuoted(chars)))
+            Ok(Spanned::new(
+                whole_span,
+                SingleQuoted(Spanned::new(inner_span, chars)),
+            ))
         } else {
-            Err(Error::UnbalancedQuotedString { span })
+            Err(Error::UnbalancedQuotedString { span: whole_span })
         }
     }
 
-    fn next_double_quoted<A: AtomTokenizable>(&mut self) -> Result<Spanned<DoubleQuoted<A>>> {
-        let mut span = self.eat(['"']);
-        let mut atoms = Vec::new();
+    fn next_double_quoted(&mut self) -> Result<Spanned<DoubleQuoted>> {
+        let mut whole_span = self.eat(['"']);
+        let mut inner_span = self.span_for_current_point();
+        let mut atoms = vec![];
         while let Some(ch) = self.peek() {
             match ch {
                 '"' => {
-                    span = span.merged(self.eat([ch]));
-                    return Ok(Spanned::new(span, DoubleQuoted(atoms)));
+                    whole_span = whole_span.merged(self.eat([ch]));
+                    return Ok(Spanned::new(
+                        whole_span,
+                        DoubleQuoted(Spanned::new(inner_span, atoms)),
+                    ));
                 }
                 _ => {
-                    let atom = A::tokenize_atom(self)?;
-                    span = span.merged(atom.span);
+                    let atom = Atom::tokenize_atom(self)?;
+                    whole_span = whole_span.merged(atom.span);
+                    inner_span = inner_span.merged(atom.span);
                     atoms.push(atom.data);
                 }
             }
         }
 
         if self.recover_error {
-            Ok(Spanned::new(span, DoubleQuoted(atoms)))
+            Ok(Spanned::new(
+                whole_span,
+                DoubleQuoted(Spanned::new(inner_span, atoms)),
+            ))
         } else {
-            Err(Error::UnbalancedQuotedString { span })
+            Err(Error::UnbalancedQuotedString { span: whole_span })
         }
     }
 
@@ -301,15 +313,15 @@ impl<'a> Lexer<'a> {
         ))
     }
 
-    fn next_delim<A>(&mut self) -> Result<TokenBase<A>> {
+    fn next_delim(&mut self) -> Result<Token> {
         match self.peek() {
             Some('|') => {
                 let span = self.eat(['|']);
-                Ok(TokenBase::new(span, TokenKindBase::Pipe))
+                Ok(Token::new(span, TokenKind::Pipe))
             }
             Some(';') => {
                 let span = self.eat([';']);
-                Ok(TokenBase::new(span, TokenKindBase::Delim))
+                Ok(Token::new(span, TokenKind::Delim))
             }
             Some(ch) => panic!("internal error: unknown delimiter `{}`", ch),
             None => panic!("internal error: no delimiter"),
@@ -357,64 +369,101 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn next_ascii_word(&mut self) -> Result<Spanned<String>> {
-        let mut span = self.span_for_current_point();
-        let mut word = String::new();
+    fn next_ascii_word(&mut self) -> Result<Vec<Spanned<char>>> {
+        let mut word = vec![];
         while let Some(ch) = self.peek() {
             if !ch.is_ascii_alphanumeric() {
                 break;
             }
-            span = span.merged(self.eat([ch]));
+            let ch = self
+                .next_char()
+                .expect("internal error: peeked char was not produced");
             word.push(ch);
         }
 
-        Ok(Spanned::new(span, word))
+        Ok(word)
     }
 
     fn next_substitution(&mut self) -> Result<Spanned<Substitution>> {
-        let mut span = self.eat(['$', '(']);
+        let whole_span = self.eat(['$', '(']);
+        let inner_span = self.span_for_current_point();
         self.substitution_level += 1;
 
         let tokens = self.tokenize()?;
-        for token in &tokens {
-            span = span.merged(token.span);
-        }
+
+        // Compute span by merging all
+        let mut whole_span = tokens
+            .data
+            .iter()
+            .fold(whole_span, |merged, tok| merged.merged(tok.span));
+        let inner_span = tokens
+            .data
+            .iter()
+            .fold(inner_span, |merged, tok| merged.merged(tok.span));
 
         if self.peek() == Some(')') {
-            span = span.merged(self.eat([')']));
+            whole_span = whole_span.merged(self.eat([')']));
         } else if !self.recover_error {
-            return Err(Error::UnbalancedSubstitution { span });
+            return Err(Error::UnbalancedSubstitution { span: whole_span });
         }
 
         self.substitution_level -= 1;
 
-        Ok(Spanned::new(span, Substitution(tokens)))
+        Ok(Spanned::new(
+            whole_span,
+            Substitution(Spanned::new(inner_span, tokens.data)),
+        ))
     }
 
-    fn next_envvar(&mut self) -> Result<Spanned<EnvVar>> {
-        let mut span = self.span_for_current_point();
-        let varname = match self.peek_rest() {
+    fn next_env_var(&mut self) -> Result<Spanned<EnvVar>> {
+        match self.peek_rest() {
             ['$', '{', ..] => {
-                span = span.merged(self.eat(['$', '{']));
-                let varname = self.next_ascii_word()?;
-                span = span.merged(varname.span);
+                let whole_span = self.eat(['$', '{']);
+                let inner_span = self.span_for_current_point();
+
+                // FIXME: should we limit to ascii word here?
+                let var_name = self.next_ascii_word()?;
+
+                // Merge spans
+                let inner_span = var_name
+                    .iter()
+                    .fold(inner_span, |merged, tok| merged.merged(tok.span));
+                let mut whole_span = var_name
+                    .iter()
+                    .fold(whole_span, |merged, tok| merged.merged(tok.span));
+
                 if self.peek() == Some('}') {
-                    span = span.merged(self.eat(['}']));
+                    whole_span = whole_span.merged(self.eat(['}']));
                 } else if !self.recover_error {
-                    return Err(Error::UnbalancedEnvVarBrace { span });
+                    return Err(Error::UnbalancedEnvVarBrace { span: whole_span });
                 }
-                varname.data
+
+                Ok(Spanned::new(
+                    whole_span,
+                    EnvVar(Spanned::new(inner_span, var_name)),
+                ))
             }
             ['$', ..] => {
-                span = span.merged(self.eat(['$']));
-                let varname = self.next_ascii_word()?;
-                span = span.merged(varname.span);
-                varname.data
-            }
-            _ => panic!("internal error: envvar not starting with `$`"),
-        };
+                let whole_span = self.eat(['$']);
+                let inner_span = self.span_for_current_point();
 
-        Ok(Spanned::new(span, EnvVar(varname)))
+                let var_name = self.next_ascii_word()?;
+
+                // Merge spans
+                let inner_span = var_name
+                    .iter()
+                    .fold(inner_span, |merged, tok| merged.merged(tok.span));
+                let whole_span = var_name
+                    .iter()
+                    .fold(whole_span, |merged, tok| merged.merged(tok.span));
+
+                Ok(Spanned::new(
+                    whole_span,
+                    EnvVar(Spanned::new(inner_span, var_name)),
+                ))
+            }
+            _ => panic!("internal error: EnvVar not starting with `$`"),
+        }
     }
 
     fn skip_whitespace(&mut self) -> Option<Span> {
@@ -469,20 +518,20 @@ impl<'a> Lexer<'a> {
     }
 }
 
-pub trait AtomTokenizable: From<char> {
+pub trait AtomTokenizable: From<Spanned<char>> {
     fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>>
     where
         Self: Sized;
 }
 
-impl AtomTokenizable for AtomKind {
+impl AtomTokenizable for Atom {
     fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>> {
         match lexer.peek_rest() {
-            ['$', '(', ..] => lexer
-                .next_substitution()
-                .map(|v| v.map(AtomKind::Substitution)),
-            ['$', ..] => lexer.next_envvar().map(|v| v.map(AtomKind::EnvVar)),
-            _ => lexer.next_char().map(|v| v.map(AtomKind::Char)),
+            ['$', '(', ..] => lexer.next_substitution().map(|v| v.map(Atom::Substitution)),
+            ['$', ..] => lexer.next_env_var().map(|v| v.map(Atom::EnvVar)),
+            _ => lexer
+                .next_char()
+                .map(|ch| Spanned::new(ch.span, Atom::Char(ch))),
         }
     }
 }
@@ -493,24 +542,40 @@ impl AtomTokenizable for char {
     }
 }
 
-pub fn normalize_tokens<A>(tokens: &mut Vec<TokenBase<A>>) {
-    remove_surrounding_arg_delim_or_delim(tokens);
-    remove_duplicated_arg_delim_or_delim(tokens);
-    remove_arg_delim_around_delim_or_pipe(tokens);
-    normalize_arg_delim_around_redirect(tokens);
-}
-
-fn kind_at<A>(tokens: &[TokenBase<A>], idx: i32) -> Option<&TokenKindBase<A>> {
-    if idx < 0 {
-        None
-    } else {
-        tokens.get(idx as usize).map(|t| &t.data)
+impl From<Spanned<char>> for char {
+    fn from(v: Spanned<char>) -> char {
+        v.data
     }
 }
 
-fn remove_surrounding_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
-    let is_non_delim =
-        |tok: &TokenBase<A>| !matches!(tok.data, TokenKindBase::Delim | TokenKindBase::ArgDelim);
+pub fn normalize_tokens(strip_delims: bool, tokens: &mut Vec<Token>) {
+    let create_arg_delim_between = |tok1: &Token, tok2: &Token| {
+        let span = Span::from(tok1.span.end..tok2.span.start);
+        Spanned::new(span, TokenKind::ArgDelim)
+    };
+
+    if strip_delims {
+        remove_surrounding_arg_delim_or_delim(tokens);
+    }
+
+    // Some normalization should always be executed
+    remove_duplicated_arg_delim_or_delim(tokens);
+    remove_arg_delim_around_delim_or_pipe(tokens);
+    normalize_arg_delim_around_redirect(tokens, create_arg_delim_between);
+}
+
+pub fn normalize_flattened_tokens(tokens: &mut Vec<FlattenedToken>) {
+    let create_arg_delim_between =
+        |_: &FlattenedToken, _: &FlattenedToken| FlattenedTokenKind::ArgDelim;
+
+    remove_surrounding_arg_delim_or_delim(tokens);
+    remove_duplicated_arg_delim_or_delim(tokens);
+    remove_arg_delim_around_delim_or_pipe(tokens);
+    normalize_arg_delim_around_redirect(tokens, create_arg_delim_between);
+}
+
+fn remove_surrounding_arg_delim_or_delim<T: HasTokenKind>(tokens: &mut Vec<T>) {
+    let is_non_delim = |tok: &T| !tok.is_delim() && !tok.is_arg_delim();
 
     // Remove leading delimiters
     let first_non_delim = tokens.iter().position(is_non_delim).unwrap_or(tokens.len());
@@ -524,20 +589,17 @@ fn remove_surrounding_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
     tokens.drain((last_non_delim + 1).min(tokens.len())..);
 }
 
-fn remove_duplicated_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
+fn remove_duplicated_arg_delim_or_delim<T: HasTokenKind>(tokens: &mut Vec<T>) {
     fn join<T, U>(l: Option<T>, r: Option<U>) -> Option<(T, U)> {
         l.and_then(|l| r.map(|r| (l, r)))
     }
 
     let mut idx = 1;
     while idx < tokens.len() {
-        if matches!(
-            join(kind_at(tokens, idx as i32), kind_at(tokens, idx as i32 - 1)),
-            Some(
-                (TokenKindBase::ArgDelim, TokenKindBase::ArgDelim)
-                    | (TokenKindBase::Delim, TokenKindBase::Delim)
-            )
-        ) {
+        let tok = &tokens[idx];
+        let tok1 = &tokens[idx - 1];
+
+        if (tok.is_arg_delim() && tok1.is_arg_delim()) || (tok.is_delim() && tok1.is_delim()) {
             tokens.remove(idx);
             idx -= 1;
         }
@@ -546,55 +608,53 @@ fn remove_duplicated_arg_delim_or_delim<A>(tokens: &mut Vec<TokenBase<A>>) {
     }
 }
 
-fn remove_arg_delim_around_delim_or_pipe<A>(tokens: &mut Vec<TokenBase<A>>) {
+fn remove_arg_delim_around_delim_or_pipe<T: HasTokenKind>(tokens: &mut Vec<T>) {
     let mut idx = 0;
     while idx < tokens.len() {
-        if matches!(tokens[idx].data, TokenKindBase::Delim | TokenKindBase::Pipe) {
-            if matches!(
-                kind_at(tokens, idx as i32 - 1),
-                Some(TokenKindBase::ArgDelim)
-            ) {
-                // Remove ArgDelim before Delim.
-                tokens.remove(idx - 1);
-                idx -= 1;
-            }
+        let tok = &tokens[idx];
+        if !tok.is_delim() && !tok.is_pipe() {
+            idx += 1;
+            continue;
+        }
 
-            if matches!(
-                kind_at(tokens, idx as i32 + 1),
-                Some(TokenKindBase::ArgDelim)
-            ) {
-                // Remove ArgDelim after Delim.
-                tokens.remove(idx + 1);
-            }
+        if tokens.get(idx.wrapping_sub(1)).map(T::is_arg_delim) == Some(true) {
+            // Remove ArgDelim before Delim or Pipe.
+            tokens.remove(idx - 1);
+            idx -= 1;
+        }
+
+        if tokens.get(idx.wrapping_add(1)).map(T::is_arg_delim) == Some(true) {
+            // Remove ArgDelim after Delim or Pipe.
+            tokens.remove(idx + 1);
         }
 
         idx += 1;
     }
 }
 
-fn normalize_arg_delim_around_redirect<A>(tokens: &mut Vec<TokenBase<A>>) {
+fn normalize_arg_delim_around_redirect<T: HasTokenKind>(
+    tokens: &mut Vec<T>,
+    create_arg_delim_between: impl Fn(&T, &T) -> T,
+) {
     let mut idx = 0;
 
     while idx < tokens.len() {
-        if matches!(tokens[idx].data, TokenKindBase::Redirect(_)) {
-            // If current token is redirect,
-            // 1. ensure token before redirect is ArgDelim,
-            // 2. remove ArgDelim after redirect if exists.
-            if !matches!(
-                kind_at(tokens, idx as i32 - 1),
-                Some(TokenKindBase::ArgDelim)
-            ) {
-                let span = Span::from(tokens[idx - 1].span.end..tokens[idx].span.start);
-                tokens.insert(idx, Spanned::new(span, TokenKindBase::ArgDelim));
-                idx += 1;
-            }
+        if !tokens[idx].is_redirect() {
+            idx += 1;
+            continue;
+        }
 
-            if matches!(
-                kind_at(tokens, idx as i32 + 1),
-                Some(TokenKindBase::ArgDelim)
-            ) {
-                tokens.remove(idx + 1);
-            }
+        // If current token is redirect,
+        // 1. ensure token before redirect is ArgDelim,
+        // 2. remove ArgDelim after redirect if exists.
+        if tokens.get(idx.wrapping_sub(1)).map(T::is_arg_delim) != Some(true) {
+            let arg_delim = create_arg_delim_between(&tokens[idx - 1], &tokens[idx]);
+            tokens.insert(idx, arg_delim);
+            idx += 1;
+        }
+
+        if tokens.get(idx.wrapping_add(1)).map(T::is_arg_delim) == Some(true) {
+            tokens.remove(idx + 1);
         }
 
         idx += 1;
@@ -608,15 +668,21 @@ mod tests {
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
 
+    macro_rules! ch {
+        ($range:expr, $ch:expr) => {
+            Spanned::new(Span::from($range), $ch)
+        };
+    }
+
     macro_rules! atom {
-        (st $st:expr) => {
-            AtomKind::Substitution(Substitution($st.to_vec()))
+        ($range:expr, st $st:expr) => {
+            Atom::Substitution(Substitution(Spanned::new(Span::from($range), $st.to_vec())))
         };
-        (env $env:expr) => {
-            AtomKind::EnvVar(EnvVar($env.to_string()))
+        ($range:expr, env $env:expr) => {
+            Atom::EnvVar(EnvVar(Spanned::new(Span::from($range), $env.to_vec())))
         };
-        ($atom:expr) => {
-            AtomKind::Char($atom)
+        ($range:expr, $atom:expr) => {
+            Atom::Char(Spanned::new(Span::from($range), $atom))
         };
     }
 
@@ -627,21 +693,21 @@ mod tests {
                 span: $range.into(),
             }
         };
-        ($range:expr, squote $squote:expr) => {
+        ($range:expr, squote $inner_range:expr, $squote:expr) => {
             Token {
-                data: SingleQuoted($squote.chars().collect()).into(),
+                data: SingleQuoted(Spanned::new(Span::from($inner_range), $squote.to_vec())).into(),
                 span: $range.into(),
             }
         };
-        ($range:expr, dquote $dquote:expr) => {
+        ($range:expr, dquote $inner_range:expr, $dquote:expr) => {
             Token {
-                data: DoubleQuoted($dquote.to_vec()).into(),
+                data: DoubleQuoted(Spanned::new(Span::from($inner_range), $dquote.to_vec())).into(),
                 span: $range.into(),
             }
         };
         ($range:expr, argd) => {
             Token {
-                data: TokenKindBase::ArgDelim,
+                data: TokenKind::ArgDelim,
                 span: $range.into(),
             }
         };
@@ -653,13 +719,13 @@ mod tests {
         };
         ($range:expr, pipe) => {
             Token {
-                data: TokenKindBase::Pipe,
+                data: TokenKind::Pipe,
                 span: $range.into(),
             }
         };
         ($range:expr, delim) => {
             Token {
-                data: TokenKindBase::Delim,
+                data: TokenKind::Delim,
                 span: $range.into(),
             }
         };
@@ -669,20 +735,22 @@ mod tests {
         Lexer::new(&s.chars().collect_vec())
             .tokenize()
             .expect("should parse")
+            .data
     }
 
     fn tokenize_error_str(s: &str) -> Vec<Token> {
         Lexer::new(&s.chars().collect_vec())
             .recover_error(true)
-            .normalize(false)
+            .strip_delims(false)
             .tokenize()
             .expect("should parse")
+            .data
     }
 
     #[test]
     fn single() {
         let tokens = tokenize_str("ls");
-        let expected = [tok!(0..1, atom 'l'), tok!(1..2, atom 's')];
+        let expected = [tok!(0..1, atom 0..1, 'l'), tok!(1..2, atom 1..2, 's')];
         assert_eq!(tokens, expected);
     }
 
@@ -690,12 +758,12 @@ mod tests {
     fn single_arg() {
         let tokens = tokenize_str("ls -al");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
-            tok!(3..4, atom '-'),
-            tok!(4..5, atom 'a'),
-            tok!(5..6, atom 'l'),
+            tok!(3..4, atom 3..4, '-'),
+            tok!(4..5, atom 4..5, 'a'),
+            tok!(5..6, atom 5..6, 'l'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -704,12 +772,12 @@ mod tests {
     fn duplicate_whitespace() {
         let tokens = tokenize_str("ls   -al");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..5, argd),
-            tok!(5..6, atom '-'),
-            tok!(6..7, atom 'a'),
-            tok!(7..8, atom 'l'),
+            tok!(5..6, atom 5..6, '-'),
+            tok!(6..7, atom 6..7, 'a'),
+            tok!(7..8, atom 7..8, 'l'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -718,47 +786,55 @@ mod tests {
     fn multiple_args() {
         let tokens = tokenize_str("ls a b c");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
-            tok!(3..4, atom 'a'),
+            tok!(3..4, atom 3..4, 'a'),
             tok!(4..5, argd),
-            tok!(5..6, atom 'b'),
+            tok!(5..6, atom 5..6, 'b'),
             tok!(6..7, argd),
-            tok!(7..8, atom 'c'),
+            tok!(7..8, atom 7..8, 'c'),
         ];
         assert_eq!(tokens, expected);
     }
 
     #[test]
-    fn envvar() {
+    fn env_var() {
         let tokens = tokenize_str("echo $ABC def");
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..9, atom env "ABC"),
+            tok!(5..9, atom 6..9, env [
+                ch!(6..7, 'A'),
+                ch!(7..8, 'B'),
+                ch!(8..9, 'C'),
+            ]),
             tok!(9..10, argd),
-            tok!(10..11, atom 'd'),
-            tok!(11..12, atom 'e'),
-            tok!(12..13, atom 'f'),
+            tok!(10..11, atom 10..11, 'd'),
+            tok!(11..12, atom 11..12, 'e'),
+            tok!(12..13, atom 12..13, 'f'),
         ];
         assert_eq!(tokens, expected);
 
         let tokens = tokenize_str("echo ${ABC} def");
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..11, atom env "ABC"),
+            tok!(5..11, atom 7..10, env [
+                ch!(7..8, 'A'),
+                ch!(8..9, 'B'),
+                ch!(9..10, 'C'),
+            ]),
             tok!(11..12, argd),
-            tok!(12..13, atom 'd'),
-            tok!(13..14, atom 'e'),
-            tok!(14..15, atom 'f'),
+            tok!(12..13, atom 12..13, 'd'),
+            tok!(13..14, atom 13..14, 'e'),
+            tok!(14..15, atom 14..15, 'f'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -767,19 +843,19 @@ mod tests {
     fn substitution() {
         let tokens = tokenize_str("echo $(ls) def");
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..10, atom st [
-                tok!(7..8, atom 'l'),
-                tok!(8..9, atom 's'),
+            tok!(5..10, atom 7..9, st [
+                tok!(7..8, atom 7..8, 'l'),
+                tok!(8..9, atom 8..9, 's'),
             ]),
             tok!(10..11, argd),
-            tok!(11..12, atom 'd'),
-            tok!(12..13, atom 'e'),
-            tok!(13..14, atom 'f'),
+            tok!(11..12, atom 11..12, 'd'),
+            tok!(12..13, atom 12..13, 'e'),
+            tok!(13..14, atom 13..14, 'f'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -788,23 +864,23 @@ mod tests {
     fn substitution_args() {
         let tokens = tokenize_str("echo $(ls -al) def");
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..14, atom st [
-                tok!(7..8, atom 'l'),
-                tok!(8..9, atom 's'),
+            tok!(5..14, atom 7..13, st [
+                tok!(7..8, atom 7..8, 'l'),
+                tok!(8..9, atom 8..9, 's'),
                 tok!(9..10, argd),
-                tok!(10..11, atom '-'),
-                tok!(11..12, atom 'a'),
-                tok!(12..13, atom 'l'),
+                tok!(10..11, atom 10..11, '-'),
+                tok!(11..12, atom 11..12, 'a'),
+                tok!(12..13, atom 12..13, 'l'),
             ]),
             tok!(14..15, argd),
-            tok!(15..16, atom 'd'),
-            tok!(16..17, atom 'e'),
-            tok!(17..18, atom 'f'),
+            tok!(15..16, atom 15..16, 'd'),
+            tok!(16..17, atom 16..17, 'e'),
+            tok!(17..18, atom 17..18, 'f'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -813,24 +889,24 @@ mod tests {
     fn subsubstitution() {
         let tokens = tokenize_str("echo $(ls $(ls)) def");
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..16, atom st [
-                tok!(7..8, atom 'l'),
-                tok!(8..9, atom 's'),
+            tok!(5..16, atom 7..15, st [
+                tok!(7..8, atom 7..8, 'l'),
+                tok!(8..9, atom 8..9, 's'),
                 tok!(9..10, argd),
-                tok!(10..15, atom st [
-                    tok!(12..13, atom 'l'),
-                    tok!(13..14, atom 's'),
+                tok!(10..15, atom 12..14, st [
+                    tok!(12..13, atom 12..13, 'l'),
+                    tok!(13..14, atom 13..14, 's'),
                 ]),
             ]),
             tok!(16..17, argd),
-            tok!(17..18, atom 'd'),
-            tok!(18..19, atom 'e'),
-            tok!(19..20, atom 'f'),
+            tok!(17..18, atom 17..18, 'd'),
+            tok!(18..19, atom 18..19, 'e'),
+            tok!(19..20, atom 19..20, 'f'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -839,35 +915,39 @@ mod tests {
     fn dquote() {
         let tokens = tokenize_str(r#"echo "a b""#);
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..10, dquote [
-                atom!('a'),
-                atom!(' '),
-                atom!('b'),
+            tok!(5..10, dquote 6..9, [
+                atom!(6..7, 'a'),
+                atom!(7..8, ' '),
+                atom!(8..9, 'b'),
             ]),
         ];
         assert_eq!(tokens, expected);
     }
 
     #[test]
-    fn dquote_envvar() {
+    fn dquote_env_var() {
         let tokens = tokenize_str(r#"echo "a $var c""#);
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..15, dquote [
-                atom!('a'),
-                atom!(' '),
-                atom!(env "var"),
-                atom!(' '),
-                atom!('c'),
+            tok!(5..15, dquote 6..14, [
+                atom!(6..7, 'a'),
+                atom!(7..8, ' '),
+                atom!(9..12, env [
+                    ch!(10..11, 'v'),
+                    ch!(11..12, 'a'),
+                    ch!(12..13, 'r'),
+                ]),
+                atom!(12..13, ' '),
+                atom!(13..14, 'c'),
             ]),
         ];
         assert_eq!(tokens, expected);
@@ -877,26 +957,39 @@ mod tests {
     fn squote() {
         let tokens = tokenize_str(r#"echo 'a b'"#);
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..10, squote "a b"),
+            tok!(5..10, squote 5..10, [
+                ch!(6..7, 'a'),
+                ch!(7..8, ' '),
+                ch!(8..9, 'a'),
+            ]),
         ];
         assert_eq!(tokens, expected);
     }
 
     #[test]
-    fn squote_envvar() {
+    fn squote_env_var() {
         let tokens = tokenize_str(r#"echo 'a $var c'"#);
         let expected = [
-            tok!(0..1, atom 'e'),
-            tok!(1..2, atom 'c'),
-            tok!(2..3, atom 'h'),
-            tok!(3..4, atom 'o'),
+            tok!(0..1, atom 0..1, 'e'),
+            tok!(1..2, atom 1..2, 'c'),
+            tok!(2..3, atom 2..3, 'h'),
+            tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..15, squote "a $var c"),
+            tok!(5..15, squote 6..14, [
+                 ch!(6..7, 'a'),
+                 ch!(7..8, ' '),
+                 ch!(8..9, '$'),
+                 ch!(9..10, 'v'),
+                 ch!(10..11, 'a'),
+                 ch!(11..12, 'r'),
+                 ch!(12..13, ' '),
+                 ch!(13..14, 'c'),
+            ]),
         ];
         assert_eq!(tokens, expected);
     }
@@ -906,18 +999,18 @@ mod tests {
         use RedirectKind as RK;
         let tokens = tokenize_str("ls > file.txt");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
             tok!(3..4, redir RK::Stdout),
-            tok!(5..6, atom 'f'),
-            tok!(6..7, atom 'i'),
-            tok!(7..8, atom 'l'),
-            tok!(8..9, atom 'e'),
-            tok!(9..10, atom '.'),
-            tok!(10..11, atom 't'),
-            tok!(11..12, atom 'x'),
-            tok!(12..13, atom 't'),
+            tok!(5..6, atom 5..6, 'f'),
+            tok!(6..7, atom 6..7, 'i'),
+            tok!(7..8, atom 7..8, 'l'),
+            tok!(8..9, atom 8..9, 'e'),
+            tok!(9..10, atom 9..10, '.'),
+            tok!(10..11, atom 10..11, 't'),
+            tok!(11..12, atom 11..12, 'x'),
+            tok!(12..13, atom 12..13, 't'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -928,18 +1021,18 @@ mod tests {
         use RedirectReferenceKind as RRK;
         let tokens = tokenize_str("ls > file.txt 2>&1");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
             tok!(3..4, redir RK::Stdout),
-            tok!(5..6, atom 'f'),
-            tok!(6..7, atom 'i'),
-            tok!(7..8, atom 'l'),
-            tok!(8..9, atom 'e'),
-            tok!(9..10, atom '.'),
-            tok!(10..11, atom 't'),
-            tok!(11..12, atom 'x'),
-            tok!(12..13, atom 't'),
+            tok!(5..6, atom 5..6, 'f'),
+            tok!(6..7, atom 6..7, 'i'),
+            tok!(7..8, atom 7..8, 'l'),
+            tok!(8..9, atom 8..9, 'e'),
+            tok!(9..10, atom 9..10, '.'),
+            tok!(10..11, atom 10..11, 't'),
+            tok!(11..12, atom 11..12, 'x'),
+            tok!(12..13, atom 12..13, 't'),
             tok!(13..14, argd),
             tok!(14..18, redir(RK::Stderr, RRK::Stdout)),
         ];
@@ -951,28 +1044,28 @@ mod tests {
         use RedirectKind as RK;
         let tokens = tokenize_str("ls >file.txt>     file.txt");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
             tok!(3..4, redir RK::Stdout),
-            tok!(4..5, atom 'f'),
-            tok!(5..6, atom 'i'),
-            tok!(6..7, atom 'l'),
-            tok!(7..8, atom 'e'),
-            tok!(8..9, atom '.'),
-            tok!(9..10, atom 't'),
-            tok!(10..11, atom 'x'),
-            tok!(11..12, atom 't'),
+            tok!(4..5, atom 4..5, 'f'),
+            tok!(5..6, atom 5..6, 'i'),
+            tok!(6..7, atom 6..7, 'l'),
+            tok!(7..8, atom 7..8, 'e'),
+            tok!(8..9, atom 8..9, '.'),
+            tok!(9..10, atom 9..10, 't'),
+            tok!(10..11, atom 10..11, 'x'),
+            tok!(11..12, atom 11..12, 't'),
             tok!(12..12, argd),
             tok!(12..13, redir RK::Stdout),
-            tok!(18..19, atom 'f'),
-            tok!(19..20, atom 'i'),
-            tok!(20..21, atom 'l'),
-            tok!(21..22, atom 'e'),
-            tok!(22..23, atom '.'),
-            tok!(23..24, atom 't'),
-            tok!(24..25, atom 'x'),
-            tok!(25..26, atom 't'),
+            tok!(18..19, atom 18..19, 'f'),
+            tok!(19..20, atom 19..20, 'i'),
+            tok!(20..21, atom 20..21, 'l'),
+            tok!(21..22, atom 21..22, 'e'),
+            tok!(22..23, atom 22..23, '.'),
+            tok!(23..24, atom 23..24, 't'),
+            tok!(24..25, atom 24..25, 'x'),
+            tok!(25..26, atom 25..26, 't'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -981,14 +1074,14 @@ mod tests {
     fn delim() {
         let tokens = tokenize_str("ls; wc -l");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, delim),
-            tok!(4..5, atom 'w'),
-            tok!(5..6, atom 'c'),
+            tok!(4..5, atom 4..5, 'w'),
+            tok!(5..6, atom 5..6, 'c'),
             tok!(6..7, argd),
-            tok!(7..8, atom '-'),
-            tok!(8..9, atom 'l'),
+            tok!(7..8, atom 7..8, '-'),
+            tok!(8..9, atom 8..9, 'l'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -997,14 +1090,14 @@ mod tests {
     fn pipe() {
         let tokens = tokenize_str("ls | wc -l");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(3..4, pipe),
-            tok!(5..6, atom 'w'),
-            tok!(6..7, atom 'c'),
+            tok!(5..6, atom 5..6, 'w'),
+            tok!(6..7, atom 6..7, 'c'),
             tok!(7..8, argd),
-            tok!(8..9, atom '-'),
-            tok!(9..10, atom 'l'),
+            tok!(8..9, atom 8..9, '-'),
+            tok!(9..10, atom 9..10, 'l'),
         ];
         assert_eq!(tokens, expected);
     }
@@ -1013,14 +1106,14 @@ mod tests {
     fn recover_error() {
         let tokens = tokenize_error_str("ls $(echo ");
         let expected = [
-            tok!(0..1, atom 'l'),
-            tok!(1..2, atom 's'),
+            tok!(0..1, atom 0..1, 'l'),
+            tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
-            tok!(3..10, atom st [
-                tok!(5..6, atom 'e'),
-                tok!(6..7, atom 'c'),
-                tok!(7..8, atom 'h'),
-                tok!(8..9, atom 'o'),
+            tok!(3..10, atom 3..10, st [
+                tok!(5..6, atom 5..6, 'e'),
+                tok!(6..7, atom 6..7, 'c'),
+                tok!(7..8, atom 7..8, 'h'),
+                tok!(8..9, atom 8..9, 'o'),
                 tok!(9..10, argd),
             ]),
         ];
