@@ -66,7 +66,8 @@ impl Shell {
 
     pub fn read_and_run(&mut self) -> Result<()> {
         let cmdline = self.read_line()?;
-        let tokens = Lexer::new(&cmdline.chars().collect_vec()).tokenize()?;
+        let source = cmdline.chars().collect_vec();
+        let tokens = Lexer::new(&source).tokenize()?;
 
         if tokens.data.is_empty() {
             return Ok(());

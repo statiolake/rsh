@@ -92,7 +92,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn tokenize(&mut self) -> Result<Spanned<Vec<Token>>> {
+    pub fn tokenize(&mut self) -> Result<Spanned<'a, Vec<Token<'a>>>> {
         let mut tokens: Vec<Token> = Vec::new();
 
         let whole_span = self.span_for_current_point();
@@ -110,19 +110,19 @@ impl<'a> Lexer<'a> {
         // Normalize tokens
         normalize_tokens(self.strip_delims, &mut tokens);
 
-        Ok(Spanned::new(whole_span, tokens))
+        Ok(Spanned::new(self.source, whole_span, tokens))
     }
 
-    pub fn next_token(&mut self) -> Result<Token> {
+    pub fn next_token(&mut self) -> Result<Token<'a>> {
         if let Some(span) = self.skip_whitespace() {
-            return Ok(Token::new(span, TokenKind::ArgDelim));
+            return Ok(Token::new(self.source, span, TokenKind::ArgDelim));
         };
 
         match self.peek_rest() {
             [] => panic!("internal error: no token found"),
             [ESCAPE_CHAR, ..] => self
                 .next_escaped_sequence()
-                .map(|ch| Spanned::new(ch.span, TokenKind::Atom(Atom::from(ch)))),
+                .map(|ch| Spanned::new(self.source, ch.span, TokenKind::Atom(Atom::from(ch)))),
             ['\'', ..] => self
                 .next_single_quoted()
                 .map(|v| v.map(|q| TokenKind::SingleQuoted(q))),
@@ -133,7 +133,7 @@ impl<'a> Lexer<'a> {
                 .next_redirect()
                 .map(|v| v.map(|r| TokenKind::Redirect(r))),
             ['|' | ';', ..] => self.next_delim(),
-            _ => Atom::tokenize_atom(self).map(|v| v.map(|a| TokenKind::Atom(a))),
+            _ => self.next_atom().map(|v| v.map(|a| TokenKind::Atom(a))),
         }
     }
 
@@ -171,7 +171,7 @@ impl<'a> Lexer<'a> {
     /// 0: show_args
     /// 1: hello world
     /// ```
-    pub fn tokenize_substitution(&mut self, delim: bool) -> Result<Vec<Token>> {
+    pub fn tokenize_substitution(&mut self, delim: bool) -> Result<Vec<Token<'a>>> {
         let mut tokens = Vec::new();
 
         while self.peek().is_some() {
@@ -181,18 +181,28 @@ impl<'a> Lexer<'a> {
         Ok(tokens)
     }
 
-    pub fn next_token_substitution(&mut self, delim: bool) -> Result<Token> {
+    pub fn next_token_substitution(&mut self, delim: bool) -> Result<Token<'a>> {
         if delim {
             if let Some(span) = self.skip_whitespace() {
-                return Ok(Token::new(span, TokenKind::ArgDelim));
+                return Ok(Token::new(self.source, span, TokenKind::ArgDelim));
             }
         }
 
         self.next_char()
-            .map(|ch| Spanned::new(ch.span, TokenKind::Atom(Atom::from(ch))))
+            .map(|ch| Spanned::new(self.source, ch.span, TokenKind::Atom(Atom::from(ch))))
     }
 
-    fn next_single_quoted(&mut self) -> Result<Spanned<SingleQuoted>> {
+    fn next_atom(&mut self) -> Result<Spanned<'a, Atom<'a>>> {
+        match self.peek_rest() {
+            ['$', '(', ..] => self.next_substitution().map(|v| v.map(Atom::Substitution)),
+            ['$', ..] => self.next_env_var().map(|v| v.map(Atom::EnvVar)),
+            _ => self
+                .next_char()
+                .map(|ch| Spanned::new(self.source, ch.span, Atom::Char(ch))),
+        }
+    }
+
+    fn next_single_quoted(&mut self) -> Result<Spanned<'a, SingleQuoted<'a>>> {
         let mut whole_span = self.eat(['\'']);
         let mut inner_span = self.span_for_current_point();
         let mut chars = vec![];
@@ -201,8 +211,9 @@ impl<'a> Lexer<'a> {
                 '\'' => {
                     whole_span = whole_span.merged(self.eat([ch]));
                     return Ok(Spanned::new(
+                        self.source,
                         whole_span,
-                        SingleQuoted(Spanned::new(inner_span, chars)),
+                        SingleQuoted(Spanned::new(self.source, inner_span, chars)),
                     ));
                 }
                 _ => {
@@ -216,15 +227,16 @@ impl<'a> Lexer<'a> {
 
         if self.recover_error {
             Ok(Spanned::new(
+                self.source,
                 whole_span,
-                SingleQuoted(Spanned::new(inner_span, chars)),
+                SingleQuoted(Spanned::new(self.source, inner_span, chars)),
             ))
         } else {
             Err(Error::UnbalancedQuotedString { span: whole_span })
         }
     }
 
-    fn next_double_quoted(&mut self) -> Result<Spanned<DoubleQuoted>> {
+    fn next_double_quoted(&mut self) -> Result<Spanned<'a, DoubleQuoted<'a>>> {
         let mut whole_span = self.eat(['"']);
         let mut inner_span = self.span_for_current_point();
         let mut atoms = vec![];
@@ -233,12 +245,13 @@ impl<'a> Lexer<'a> {
                 '"' => {
                     whole_span = whole_span.merged(self.eat([ch]));
                     return Ok(Spanned::new(
+                        self.source,
                         whole_span,
-                        DoubleQuoted(Spanned::new(inner_span, atoms)),
+                        DoubleQuoted(Spanned::new(self.source, inner_span, atoms)),
                     ));
                 }
                 _ => {
-                    let atom = Atom::tokenize_atom(self)?;
+                    let atom = self.next_atom()?;
                     whole_span = whole_span.merged(atom.span);
                     inner_span = inner_span.merged(atom.span);
                     atoms.push(atom.data);
@@ -248,15 +261,16 @@ impl<'a> Lexer<'a> {
 
         if self.recover_error {
             Ok(Spanned::new(
+                self.source,
                 whole_span,
-                DoubleQuoted(Spanned::new(inner_span, atoms)),
+                DoubleQuoted(Spanned::new(self.source, inner_span, atoms)),
             ))
         } else {
             Err(Error::UnbalancedQuotedString { span: whole_span })
         }
     }
 
-    fn next_redirect(&mut self) -> Result<Spanned<Redirect>> {
+    fn next_redirect(&mut self) -> Result<Spanned<'a, Redirect>> {
         let mut span = self.span_for_current_point();
 
         let (append, kind) = match self.peek_rest() {
@@ -304,6 +318,7 @@ impl<'a> Lexer<'a> {
         };
 
         Ok(Spanned::new(
+            self.source,
             span,
             Redirect {
                 kind,
@@ -313,22 +328,22 @@ impl<'a> Lexer<'a> {
         ))
     }
 
-    fn next_delim(&mut self) -> Result<Token> {
+    fn next_delim(&mut self) -> Result<Token<'a>> {
         match self.peek() {
             Some('|') => {
                 let span = self.eat(['|']);
-                Ok(Token::new(span, TokenKind::Pipe))
+                Ok(Token::new(self.source, span, TokenKind::Pipe))
             }
             Some(';') => {
                 let span = self.eat([';']);
-                Ok(Token::new(span, TokenKind::Delim))
+                Ok(Token::new(self.source, span, TokenKind::Delim))
             }
             Some(ch) => panic!("internal error: unknown delimiter `{}`", ch),
             None => panic!("internal error: no delimiter"),
         }
     }
 
-    fn next_escaped_sequence(&mut self) -> Result<Spanned<char>> {
+    fn next_escaped_sequence(&mut self) -> Result<Spanned<'a, char>> {
         assert!(
             self.peek() == Some(ESCAPE_CHAR),
             "internal error: escaped sequence not starting with `{}`",
@@ -338,15 +353,15 @@ impl<'a> Lexer<'a> {
         match self.lookahead(1) {
             Some(ch) if SHOULD_ESCAPE_CHAR.contains(&ch) => {
                 let span = self.eat([ESCAPE_CHAR, ch]);
-                Ok(Spanned::new(span, ch))
+                Ok(Spanned::new(self.source, span, ch))
             }
             Some('n') => {
                 let span = self.eat([ESCAPE_CHAR, 'n']);
-                Ok(Spanned::new(span, '\n'))
+                Ok(Spanned::new(self.source, span, '\n'))
             }
             Some('t') => {
                 let span = self.eat([ESCAPE_CHAR, 't']);
-                Ok(Spanned::new(span, '\t'))
+                Ok(Spanned::new(self.source, span, '\t'))
             }
             Some(ch) => {
                 let span = self.eat([ESCAPE_CHAR, ch]);
@@ -358,18 +373,18 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn next_char(&mut self) -> Result<Spanned<char>> {
+    fn next_char(&mut self) -> Result<Spanned<'a, char>> {
         match self.peek() {
             Some(ESCAPE_CHAR) => self.next_escaped_sequence(),
             Some(ch) => {
                 let span = self.eat([ch]);
-                Ok(Spanned::new(span, ch))
+                Ok(Spanned::new(self.source, span, ch))
             }
             None => panic!("internal error: no next character"),
         }
     }
 
-    fn next_ascii_word(&mut self) -> Result<Vec<Spanned<char>>> {
+    fn next_ascii_word(&mut self) -> Result<Vec<Spanned<'a, char>>> {
         let mut word = vec![];
         while let Some(ch) = self.peek() {
             if !ch.is_ascii_alphanumeric() {
@@ -384,7 +399,7 @@ impl<'a> Lexer<'a> {
         Ok(word)
     }
 
-    fn next_substitution(&mut self) -> Result<Spanned<Substitution>> {
+    fn next_substitution(&mut self) -> Result<Spanned<'a, Substitution<'a>>> {
         let whole_span = self.eat(['$', '(']);
         let inner_span = self.span_for_current_point();
         self.substitution_level += 1;
@@ -410,12 +425,13 @@ impl<'a> Lexer<'a> {
         self.substitution_level -= 1;
 
         Ok(Spanned::new(
+            self.source,
             whole_span,
-            Substitution(Spanned::new(inner_span, tokens.data)),
+            Substitution(Spanned::new(self.source, inner_span, tokens.data)),
         ))
     }
 
-    fn next_env_var(&mut self) -> Result<Spanned<EnvVar>> {
+    fn next_env_var(&mut self) -> Result<Spanned<'a, EnvVar<'a>>> {
         match self.peek_rest() {
             ['$', '{', ..] => {
                 let whole_span = self.eat(['$', '{']);
@@ -439,8 +455,9 @@ impl<'a> Lexer<'a> {
                 }
 
                 Ok(Spanned::new(
+                    self.source,
                     whole_span,
-                    EnvVar(Spanned::new(inner_span, var_name)),
+                    EnvVar(Spanned::new(self.source, inner_span, var_name)),
                 ))
             }
             ['$', ..] => {
@@ -458,8 +475,9 @@ impl<'a> Lexer<'a> {
                     .fold(whole_span, |merged, tok| merged.merged(tok.span));
 
                 Ok(Spanned::new(
+                    self.source,
                     whole_span,
-                    EnvVar(Spanned::new(inner_span, var_name)),
+                    EnvVar(Spanned::new(self.source, inner_span, var_name)),
                 ))
             }
             _ => panic!("internal error: EnvVar not starting with `$`"),
@@ -513,45 +531,15 @@ impl<'a> Lexer<'a> {
         self.peek_rest().get(n).copied()
     }
 
-    fn peek_rest(&self) -> &[char] {
+    fn peek_rest(&self) -> &'a [char] {
         &self.source[self.current..]
     }
 }
 
-pub trait AtomTokenizable: From<Spanned<char>> {
-    fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>>
-    where
-        Self: Sized;
-}
-
-impl AtomTokenizable for Atom {
-    fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>> {
-        match lexer.peek_rest() {
-            ['$', '(', ..] => lexer.next_substitution().map(|v| v.map(Atom::Substitution)),
-            ['$', ..] => lexer.next_env_var().map(|v| v.map(Atom::EnvVar)),
-            _ => lexer
-                .next_char()
-                .map(|ch| Spanned::new(ch.span, Atom::Char(ch))),
-        }
-    }
-}
-
-impl AtomTokenizable for char {
-    fn tokenize_atom(lexer: &mut Lexer) -> Result<Spanned<Self>> {
-        lexer.next_char()
-    }
-}
-
-impl From<Spanned<char>> for char {
-    fn from(v: Spanned<char>) -> char {
-        v.data
-    }
-}
-
-pub fn normalize_tokens(strip_delims: bool, tokens: &mut Vec<Token>) {
-    let create_arg_delim_between = |tok1: &Token, tok2: &Token| {
+pub fn normalize_tokens<'a>(strip_delims: bool, tokens: &mut Vec<Token<'a>>) {
+    let create_arg_delim_between = |tok1: &Token<'a>, tok2: &Token<'a>| {
         let span = Span::from(tok1.span.end..tok2.span.start);
-        Spanned::new(span, TokenKind::ArgDelim)
+        Spanned::new(tok1.source, span, TokenKind::ArgDelim)
     };
 
     if strip_delims {
@@ -670,76 +658,116 @@ mod tests {
 
     macro_rules! ch {
         ($range:expr, $ch:expr) => {
-            Spanned::new(Span::from($range), $ch)
+            Spanned::new(&[], Span::from($range), $ch)
         };
     }
 
     macro_rules! atom {
         ($range:expr, st $st:expr) => {
-            Atom::Substitution(Substitution(Spanned::new(Span::from($range), $st.to_vec())))
+            Atom::Substitution(Substitution(Spanned::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                Span::from($range),
+                $st.to_vec(),
+            )))
         };
         ($range:expr, env $env:expr) => {
-            Atom::EnvVar(EnvVar(Spanned::new(Span::from($range), $env.to_vec())))
+            Atom::EnvVar(EnvVar(Spanned::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                Span::from($range),
+                $env.to_vec(),
+            )))
         };
         ($range:expr, $atom:expr) => {
-            Atom::Char(Spanned::new(Span::from($range), $atom))
+            Atom::Char(Spanned::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                Span::from($range),
+                $atom,
+            ))
         };
     }
 
     macro_rules! tok {
         ($range:expr, atom $($atom:tt)*) => {
-            Token {
-                data: atom!($($atom)*).into(),
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                atom!($($atom)*).into(),
+            )
         };
         ($range:expr, squote $inner_range:expr, $squote:expr) => {
-            Token {
-                data: SingleQuoted(Spanned::new(Span::from($inner_range), $squote.to_vec())).into(),
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                SingleQuoted(Spanned::new(
+                    // Hack: this is just for test. This should be a original source.
+                    &[],
+                    Span::from($inner_range),
+                    $squote.to_vec()
+                )).into(),
+            )
         };
         ($range:expr, dquote $inner_range:expr, $dquote:expr) => {
-            Token {
-                data: DoubleQuoted(Spanned::new(Span::from($inner_range), $dquote.to_vec())).into(),
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                DoubleQuoted(Spanned::new(
+                    // Hack: this is just for test. This should be a original source.
+                    &[],
+                    Span::from($inner_range),
+                    $dquote.to_vec()
+                )).into(),
+            )
         };
         ($range:expr, argd) => {
-            Token {
-                data: TokenKind::ArgDelim,
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                TokenKind::ArgDelim,
+            )
         };
         ($range:expr, redir $redir:expr) => {
-            Token {
-                data: Redirect::from($redir).into(),
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                Redirect::from($redir).into(),
+            )
         };
         ($range:expr, pipe) => {
-            Token {
-                data: TokenKind::Pipe,
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                TokenKind::Pipe,
+            )
         };
         ($range:expr, delim) => {
-            Token {
-                data: TokenKind::Delim,
-                span: $range.into(),
-            }
+            Token::new(
+                // Hack: this is just for test. This should be a original source.
+                &[],
+                $range.into(),
+                TokenKind::Delim,
+            )
         };
     }
 
     fn tokenize_str(s: &str) -> Vec<Token> {
-        Lexer::new(&s.chars().collect_vec())
+        // Hack: leak everything to get long-lived lifetime
+        Lexer::new(s.chars().collect_vec().leak())
             .tokenize()
             .expect("should parse")
             .data
     }
 
     fn tokenize_error_str(s: &str) -> Vec<Token> {
-        Lexer::new(&s.chars().collect_vec())
+        Lexer::new(s.chars().collect_vec().leak())
             .recover_error(true)
             .strip_delims(false)
             .tokenize()

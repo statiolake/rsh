@@ -7,7 +7,7 @@ use std::path::{Path, MAIN_SEPARATOR};
 
 pub struct PathCompleter<'b> {
     pub buf: &'b LineBuffer,
-    pub target: Spanned<Vec<Atom>>,
+    pub target: Spanned<'b, Vec<Atom<'b>>>,
     pub in_double: bool,
     pub in_single: bool,
 }

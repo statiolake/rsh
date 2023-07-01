@@ -44,23 +44,25 @@ impl From<Range<usize>> for Span {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Spanned<T> {
+pub struct Spanned<'b, T> {
+    pub source: &'b [char],
     pub data: T,
     pub span: Span,
 }
 
-impl<T> Spanned<T> {
-    pub fn new(span: Span, data: T) -> Self {
-        Self { span, data }
+impl<'b, T> Spanned<'b, T> {
+    pub fn new(source: &'b [char], span: Span, data: T) -> Self {
+        Self { source, span, data }
     }
 
-    pub fn map<F, U>(self, f: F) -> Spanned<U>
+    pub fn map<F, U>(self, f: F) -> Spanned<'b, U>
     where
         F: FnOnce(T) -> U,
     {
         Spanned {
-            data: f(self.data),
+            source: self.source,
             span: self.span,
+            data: f(self.data),
         }
     }
 }

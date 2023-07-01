@@ -55,7 +55,10 @@ pub fn handle_completion<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer) 
 /// (ExecutableCompletor) target: check_compl
 /// ```
 ///
-fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn Completer + 'b>> {
+fn find_completer<'b>(
+    buf: &'b LineBuffer,
+    tokens: &TokenList<'b>,
+) -> Option<Box<dyn Completer + 'b>> {
     let tokens = extract_delim_splitted_last_tokens(tokens);
 
     // Basically we want to check the last token to determine the kind of completion.
@@ -65,8 +68,8 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
         let span = tokens.span;
 
         return Some(Box::new(ExecutableCompleter {
-                buf,
-            target: Spanned::new(span, vec![]),
+            buf,
+            target: Spanned::new(&buf.buf, span, vec![]),
             in_double: false,
             in_single: false,
         }))
@@ -82,6 +85,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
             // If the cursor is inside an environment variable name (Case 3), complete a variable
             // name.
             let target: Spanned<Vec<Atom>> = Spanned::new(
+                env_var.0.source,
                 env_var.0.span,
                 env_var.0.data.iter().map(|ch| Atom::Char(*ch)).collect(),
             );
@@ -90,6 +94,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
         TokenKind::SingleQuoted(sq) => {
             // target are the string inside single quotes.
             let target = Spanned::new(
+                sq.0.source,
                 sq.0.span,
                 sq.0.data.iter().map(|ch| Atom::Char(*ch)).collect(),
             );
@@ -141,7 +146,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
             // TODO: support command line argument custom completion?
             Some(Box::new(PathCompleter {
                 buf,
-                target: Spanned::new(last_token.span.end_point(), vec![]),
+                target: Spanned::new(&[], last_token.span.end_point(), vec![]),
                 in_single: false,
                 in_double: false,
             }) as _)
@@ -150,7 +155,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
             // If the cursor is after the pipe, complete executable.
             Some(Box::new(ExecutableCompleter {
                 buf,
-                target: Spanned::new(last_token.span.end_point(), vec![]),
+                target: Spanned::new(&[], last_token.span.end_point(), vec![]),
                 in_single: false,
                 in_double: false,
             }) as _)
@@ -165,7 +170,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
                 let mut target_atoms = vec![];
                 let mut spans = vec![];
                 for tok in tokens.data.iter().rev() {
-                    let Spanned { span, data: TokenKind::Atom(atom) } = tok else {
+                    let Spanned { span, data: TokenKind::Atom(atom), .. } = tok else {
                         break;
                     };
 
@@ -178,7 +183,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
                 let target_span = spans
                     .iter()
                     .fold(spans[0].start_point(), |sum, span| sum.merged(*span));
-                Spanned::new(target_span, target_atoms)
+                Spanned::new(tokens.source, target_span, target_atoms)
             };
 
             // If there is no ArgDelim, it should be executable completion.
@@ -198,7 +203,7 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
                     target,
                     in_single: false,
                     in_double: false,
-                }))
+                }) as _)
             }
         }
     }
@@ -206,7 +211,9 @@ fn find_completer<'b>(buf: &'b LineBuffer, tokens: &TokenList) -> Option<Box<dyn
 
 /// Extracts the last component splitted by Delim. This function returns the same content if there
 /// is no Delim.
-fn extract_delim_splitted_last_tokens(tokens: &Spanned<Vec<Token>>) -> Spanned<Vec<Token>> {
+fn extract_delim_splitted_last_tokens<'b>(
+    tokens: &Spanned<'b, Vec<Token<'b>>>,
+) -> Spanned<'b, Vec<Token<'b>>> {
     let is_delim = |tok: &Token| tok.data.delim().is_some();
 
     // Find the last component. Note that rsplit() never returns an empty iterator; even if there is
@@ -227,5 +234,5 @@ fn extract_delim_splitted_last_tokens(tokens: &Spanned<Vec<Token>>) -> Spanned<V
             .unwrap_or(tokens.span.start_point())
     };
 
-    Spanned::new(last_tokens_span, last_tokens.to_vec())
+    Spanned::new(tokens.source, last_tokens_span, last_tokens.to_vec())
 }

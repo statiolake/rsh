@@ -4,7 +4,7 @@ use rsh_line_parser::{span::Spanned, token::Atom};
 
 pub struct EnvVarCompleter<'b> {
     pub buf: &'b LineBuffer,
-    pub target: Spanned<Vec<Atom>>,
+    pub target: Spanned<'b, Vec<Atom<'b>>>,
 }
 
 impl Completer for EnvVarCompleter<'_> {
