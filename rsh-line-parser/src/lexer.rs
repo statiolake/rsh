@@ -67,8 +67,8 @@ pub struct Lexer<'a> {
     /// Keep lexer running even when there's error
     recover_error: bool,
 
-    /// Strip whitespaces at the both end.
-    strip_delims: bool,
+    /// Trim whitespaces at the both end.
+    trim_delims: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -77,8 +77,8 @@ impl<'a> Lexer<'a> {
         self
     }
 
-    pub fn strip_delims(&mut self, value: bool) -> &mut Self {
-        self.strip_delims = value;
+    pub fn trim_delims(&mut self, value: bool) -> &mut Self {
+        self.trim_delims = value;
         self
     }
 
@@ -88,7 +88,7 @@ impl<'a> Lexer<'a> {
             current: 0,
             substitution_level: 0,
             recover_error: false,
-            strip_delims: true,
+            trim_delims: true,
         }
     }
 
@@ -108,7 +108,7 @@ impl<'a> Lexer<'a> {
             .fold(whole_span, |merged, tok| merged.merged(tok.span));
 
         // Normalize tokens
-        normalize_tokens(self.strip_delims, &mut tokens);
+        normalize_tokens(self.trim_delims, &mut tokens);
 
         Ok(Spanned::new(self.source, whole_span, tokens))
     }
@@ -387,9 +387,10 @@ impl<'a> Lexer<'a> {
     fn next_ascii_word(&mut self) -> Result<Vec<Spanned<'a, char>>> {
         let mut word = vec![];
         while let Some(ch) = self.peek() {
-            if !ch.is_ascii_alphanumeric() {
+            if !ch.is_ascii_alphanumeric() && ch != '_' {
                 break;
             }
+
             let ch = self
                 .next_char()
                 .expect("internal error: peeked char was not produced");
@@ -536,13 +537,13 @@ impl<'a> Lexer<'a> {
     }
 }
 
-pub fn normalize_tokens<'a>(strip_delims: bool, tokens: &mut Vec<Token<'a>>) {
+pub fn normalize_tokens<'a>(trim_delims: bool, tokens: &mut Vec<Token<'a>>) {
     let create_arg_delim_between = |tok1: &Token<'a>, tok2: &Token<'a>| {
         let span = Span::from(tok1.span.end..tok2.span.start);
         Spanned::new(tok1.source, span, TokenKind::ArgDelim)
     };
 
-    if strip_delims {
+    if trim_delims {
         remove_surrounding_arg_delim_or_delim(tokens);
     }
 
@@ -769,7 +770,7 @@ mod tests {
     fn tokenize_error_str(s: &str) -> Vec<Token> {
         Lexer::new(s.chars().collect_vec().leak())
             .recover_error(true)
-            .strip_delims(false)
+            .trim_delims(false)
             .tokenize()
             .expect("should parse")
             .data
@@ -828,7 +829,7 @@ mod tests {
 
     #[test]
     fn env_var() {
-        let tokens = tokenize_str("echo $ABC def");
+        let tokens = tokenize_str("echo $A_C def");
         let expected = [
             tok!(0..1, atom 0..1, 'e'),
             tok!(1..2, atom 1..2, 'c'),
@@ -837,7 +838,7 @@ mod tests {
             tok!(4..5, argd),
             tok!(5..9, atom 6..9, env [
                 ch!(6..7, 'A'),
-                ch!(7..8, 'B'),
+                ch!(7..8, '_'),
                 ch!(8..9, 'C'),
             ]),
             tok!(9..10, argd),
@@ -847,7 +848,7 @@ mod tests {
         ];
         assert_eq!(tokens, expected);
 
-        let tokens = tokenize_str("echo ${ABC} def");
+        let tokens = tokenize_str("echo ${A_C} def");
         let expected = [
             tok!(0..1, atom 0..1, 'e'),
             tok!(1..2, atom 1..2, 'c'),
@@ -856,7 +857,7 @@ mod tests {
             tok!(4..5, argd),
             tok!(5..11, atom 7..10, env [
                 ch!(7..8, 'A'),
-                ch!(8..9, 'B'),
+                ch!(8..9, '_'),
                 ch!(9..10, 'C'),
             ]),
             tok!(11..12, argd),
@@ -970,9 +971,9 @@ mod tests {
                 atom!(6..7, 'a'),
                 atom!(7..8, ' '),
                 atom!(9..12, env [
-                    ch!(10..11, 'v'),
-                    ch!(11..12, 'a'),
-                    ch!(12..13, 'r'),
+                    ch!(9..10, 'v'),
+                    ch!(10..11, 'a'),
+                    ch!(11..12, 'r'),
                 ]),
                 atom!(12..13, ' '),
                 atom!(13..14, 'c'),
@@ -990,10 +991,10 @@ mod tests {
             tok!(2..3, atom 2..3, 'h'),
             tok!(3..4, atom 3..4, 'o'),
             tok!(4..5, argd),
-            tok!(5..10, squote 5..10, [
+            tok!(5..10, squote 6..9, [
                 ch!(6..7, 'a'),
                 ch!(7..8, ' '),
-                ch!(8..9, 'a'),
+                ch!(8..9, 'b'),
             ]),
         ];
         assert_eq!(tokens, expected);
@@ -1137,7 +1138,7 @@ mod tests {
             tok!(0..1, atom 0..1, 'l'),
             tok!(1..2, atom 1..2, 's'),
             tok!(2..3, argd),
-            tok!(3..10, atom 3..10, st [
+            tok!(3..10, atom 5..10, st [
                 tok!(5..6, atom 5..6, 'e'),
                 tok!(6..7, atom 6..7, 'c'),
                 tok!(7..8, atom 7..8, 'h'),

@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{fmt, hash, ops::Range};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Span {
@@ -43,11 +43,26 @@ impl From<Range<usize>> for Span {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialOrd, Ord)]
 pub struct Spanned<'b, T> {
     pub source: &'b [char],
     pub data: T,
     pub span: Span,
+}
+
+impl<T: PartialEq> PartialEq for Spanned<'_, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data && self.span == other.span
+    }
+}
+
+impl<T: Eq> Eq for Spanned<'_, T> {}
+
+impl<T: hash::Hash> hash::Hash for Spanned<'_, T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.data.hash(state);
+        self.span.hash(state);
+    }
 }
 
 impl<'b, T> Spanned<'b, T> {
@@ -64,5 +79,14 @@ impl<'b, T> Spanned<'b, T> {
             span: self.span,
             data: f(self.data),
         }
+    }
+}
+
+impl<'b, T: fmt::Debug> fmt::Debug for Spanned<'b, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Spanned")
+            .field("data", &self.data)
+            .field("span", &self.span)
+            .finish()
     }
 }

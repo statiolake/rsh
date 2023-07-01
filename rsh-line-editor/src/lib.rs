@@ -825,23 +825,27 @@ impl LineBuffer {
         self.record_history();
 
         let range = span.start..span.end;
+        let new_chars = new_chars.into_iter().collect_vec();
 
-        // Fix cursor position
-        if range.contains(&self.cursor_at) {
-            self.cursor_at = span.start;
+        // Compute later cursor position. Cursor should be placed at
+        let later_cursor_at = if range.contains(&self.cursor_at) {
+            span.start + new_chars.len()
         } else if self.cursor_at >= span.end {
-            self.cursor_at -= span.end - span.start;
-        }
+            self.cursor_at - (span.end - span.start) + new_chars.len()
+        } else {
+            self.cursor_at
+        };
 
         // Remove string in specified range
         self.buf.drain(range);
 
+        // Insert each chars at the starting point
+        self.cursor_at = span.start;
         assert!(self.cursor_at <= self.buf.len());
-
-        // Insert each chars
         new_chars
             .into_iter()
             .for_each(|ch| self.insert_norecord(ch));
+        self.cursor_at = later_cursor_at;
     }
 
     fn word_start_before(&self, n: usize) -> usize {

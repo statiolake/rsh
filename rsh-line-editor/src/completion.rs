@@ -16,6 +16,7 @@ pub fn handle_completion<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer) 
     let before_cursor = &buf.buf[..buf.cursor_at];
     let tokens = Lexer::new(before_cursor)
         .recover_error(true)
+        .trim_delims(false)
         .tokenize()
         .unwrap_or_else(|e| panic!("internal error: lexer error not recovered: {}", e));
 
@@ -31,7 +32,13 @@ pub fn handle_completion<P>(printer: &mut LinePrinter<P>, buf: &mut LineBuffer) 
             candidates,
         } => {
             buf.replace_span(partial_span, partially_replace_to.chars());
-            printer.set_hints(candidates);
+            printer.set_hints(vec![format!(
+                "replaced {}..{} to {} --- {}",
+                partial_span.start,
+                partial_span.end,
+                partially_replace_to,
+                buf.chars().collect::<String>()
+            )]);
         }
     }
 
@@ -62,8 +69,7 @@ fn find_completer<'b>(
     let tokens = extract_delim_splitted_last_tokens(tokens);
 
     // Basically we want to check the last token to determine the kind of completion.
-    let Some(last_token) = tokens.data.last()
-        else {
+    let Some(last_token) = tokens.data.last() else {
         // If tokens are empty, command line is empty. Just complete all executables.
         let span = tokens.span;
 
