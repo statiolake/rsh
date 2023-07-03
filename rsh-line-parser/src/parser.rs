@@ -1,6 +1,4 @@
-use crate::token::{
-    DoubleQuoted, FlattenedQuoted, FlattenedToken, FlattenedTokenKind, SingleQuoted,
-};
+use crate::token::{FlattenedQuoted, FlattenedToken, FlattenedTokenKind};
 use itertools::Itertools;
 use std::path::PathBuf;
 
@@ -187,7 +185,7 @@ fn toks_to_string(toks: &[FlattenedToken]) -> String {
     for tok in toks {
         match &tok {
             FlattenedTokenKind::Atom(a) => arg.push(*a),
-            FlattenedTokenKind::Quoted(FlattenedQuoted(q)) => arg.extend(q.iter().map(|ch| ch)),
+            FlattenedTokenKind::Quoted(FlattenedQuoted(q)) => arg.extend(q),
             e => panic!("internal error: invalid token kind `{:?}` is in args", e),
         }
     }

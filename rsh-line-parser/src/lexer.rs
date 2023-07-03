@@ -125,15 +125,15 @@ impl<'a> Lexer<'a> {
                 .map(|ch| Spanned::new(self.source, ch.span, TokenKind::Atom(Atom::from(ch)))),
             ['\'', ..] => self
                 .next_single_quoted()
-                .map(|v| v.map(|q| TokenKind::SingleQuoted(q))),
+                .map(|v| v.map(TokenKind::SingleQuoted)),
             ['"', ..] => self
                 .next_double_quoted()
-                .map(|v| v.map(|q| TokenKind::DoubleQuoted(q))),
-            ['>' | '<', ..] | ['1' | '2', '>', ..] => self
-                .next_redirect()
-                .map(|v| v.map(|r| TokenKind::Redirect(r))),
+                .map(|v| v.map(TokenKind::DoubleQuoted)),
+            ['>' | '<', ..] | ['1' | '2', '>', ..] => {
+                self.next_redirect().map(|v| v.map(TokenKind::Redirect))
+            }
             ['|' | ';', ..] => self.next_delim(),
-            _ => self.next_atom().map(|v| v.map(|a| TokenKind::Atom(a))),
+            _ => self.next_atom().map(|v| v.map(TokenKind::Atom)),
         }
     }
 
@@ -579,10 +579,6 @@ fn remove_surrounding_arg_delim_or_delim<T: HasTokenKind>(tokens: &mut Vec<T>) {
 }
 
 fn remove_duplicated_arg_delim_or_delim<T: HasTokenKind>(tokens: &mut Vec<T>) {
-    fn join<T, U>(l: Option<T>, r: Option<U>) -> Option<(T, U)> {
-        l.and_then(|l| r.map(|r| (l, r)))
-    }
-
     let mut idx = 1;
     while idx < tokens.len() {
         let tok = &tokens[idx];

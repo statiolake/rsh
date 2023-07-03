@@ -8,12 +8,11 @@ use anyhow::Result;
 use itertools::Itertools;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use rsh_line_parser::{
-    lexer::{normalize_flattened_tokens, Lexer, ESCAPE_CHAR},
+    lexer::{normalize_flattened_tokens, Lexer},
     parser::{
         parse_command_line, CommandLine, IOSpec, PipeCommand, StderrDestination, StdinSource,
         StdoutDestination,
     },
-    span::Span,
     token::{Atom, FlattenedToken, Token, TokenKind},
 };
 use same_file::is_same_file;
@@ -41,7 +40,7 @@ pub struct ShellState {
 
 impl Shell {
     pub fn new() -> Result<Self> {
-        let rle = LineEditor::with_escape_char(Some(ESCAPE_CHAR));
+        let rle = LineEditor::new();
         let state = ShellState::new()?;
         Ok(Self { rle, state })
     }
@@ -169,17 +168,15 @@ fn flatten_token(
 ) -> Result<Vec<FlattenedToken>> {
     let mut res = vec![];
 
-    let span = token.span;
-
     match token.data {
-        TokenKind::Atom(atom) => res.extend(flatten_atom(state, span, atom, false, iospec)?),
+        TokenKind::Atom(atom) => res.extend(flatten_atom(state, atom, false, iospec)?),
         TokenKind::SingleQuoted(q) => {
             q.0.data
                 .into_iter()
                 .for_each(|ch| res.push(FlattenedToken::Atom(ch.data)))
         }
         TokenKind::DoubleQuoted(q) => q.0.data.into_iter().try_for_each(|atom| {
-            flatten_atom(state, span, atom, true, iospec.clone()).map(|t| res.extend(t))
+            flatten_atom(state, atom, true, iospec.clone()).map(|t| res.extend(t))
         })?,
         TokenKind::ArgDelim => res.push(FlattenedToken::ArgDelim),
         TokenKind::Redirect(redir) => res.push(FlattenedToken::Redirect(redir)),
@@ -192,7 +189,6 @@ fn flatten_token(
 
 fn flatten_atom(
     state: &mut ShellState,
-    span: Span,
     atom: Atom,
     in_double_quote: bool,
     iospec: Option<IOSpec>,

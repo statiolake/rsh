@@ -45,14 +45,12 @@ impl From<crossterm::ErrorKind> for Error {
 
 #[derive(Debug)]
 pub struct LineEditor {
-    escape_char: Option<char>,
     history: Vec<String>,
 }
 
 impl LineEditor {
-    pub fn with_escape_char(escape_char: Option<char>) -> LineEditor {
+    pub fn new() -> LineEditor {
         LineEditor {
-            escape_char,
             history: Vec::new(),
         }
     }
@@ -906,6 +904,6 @@ impl fmt::Display for LineBuffer {
 
 impl Default for LineEditor {
     fn default() -> Self {
-        Self::with_escape_char(None)
+        Self::new()
     }
 }

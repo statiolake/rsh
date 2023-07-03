@@ -1,9 +1,6 @@
 use super::{Completer, CompletionResult};
-use crate::{LineBuffer, LinePrinter, Result};
+use crate::LineBuffer;
 use rsh_line_parser::{span::Spanned, token::Atom};
-use std::borrow::Cow;
-use std::fs::read_dir;
-use std::path::{Path, MAIN_SEPARATOR};
 
 pub struct PathCompleter<'b> {
     pub buf: &'b LineBuffer,
