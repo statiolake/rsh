@@ -229,7 +229,12 @@ fn file_completor<P>(
             .file_name()
             .map(|name| name.to_string_lossy())
             .unwrap_or_else(|| Cow::from(""));
-        (name, path.parent().unwrap_or_else(|| Path::new(".")))
+        (
+            name,
+            path.parent()
+                .filter(|p| p != &Path::new(""))
+                .unwrap_or_else(|| Path::new(".")),
+        )
     };
 
     let entries = match read_dir(parent) {
