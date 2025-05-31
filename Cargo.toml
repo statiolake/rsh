@@ -1,2 +1,3 @@
 [workspace]
 members = ["rsh", "rsh-line-parser", "rsh-line-editor", "dev-tools"]
+resolver = "3"
