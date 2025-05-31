@@ -41,8 +41,10 @@
 
 ### Pre-Commit Checks
 - Always run `git status` to review staged files before committing
-- Use `git diff --cached` to review changes that will be committed
+- **MANDATORY**: Use `git diff --cached` to review changes that will be committed
 - Verify that only intended changes are included in the commit
+- Never commit without first reviewing the diff output
+- This step is critical for catching unintended changes and ensuring commit quality
 
 ## Parser/Lexer Guidelines
 
@@ -60,6 +62,18 @@
 - Keep related functionality in appropriate modules
 - Use clear, descriptive file and function names
 - Maintain consistent code structure across the project
+
+## Task Completion Workflow
+
+### Commit Before Task Completion
+- Always commit changes before reporting task completion
+- Complete all necessary commits as part of the task itself
+- Never report task completion without first committing changes
+- Follow the complete commit workflow:
+  1. Run `git status` to review staged files
+  2. Run `git diff --cached` to review changes (MANDATORY)
+  3. Commit with proper conventional commit message
+  4. Only then report task completion
 
 ## Rule Maintenance
 - After each coding task with Roo Code, update these rules under .roo/rules based on new guidelines and feedback
