@@ -3,7 +3,6 @@ use crate::{
     shell::ShellState,
 };
 use anyhow::Result;
-use std::env::set_var;
 
 #[derive(Debug)]
 pub struct CmdSet(Vec<String>);
@@ -21,7 +20,7 @@ impl Executable for CmdSet {
 
     fn execute(
         &mut self,
-        _state: &mut ShellState,
+        state: &mut ShellState,
         _stdin: Box<dyn ReadIntoStdio>,
         _stdout: Box<dyn WriteIntoStdio>,
         mut stderr: Box<dyn WriteIntoStdio>,
@@ -31,9 +30,9 @@ impl Executable for CmdSet {
             return Ok(Exit::Failure);
         }
 
-        let key = &self.0[0];
-        let value = &self.0[1];
-        set_var(key, value);
+        let key = self.0[0].clone();
+        let value = self.0[1].clone();
+        state.set_var(key, value);
         Ok(Exit::Success)
     }
 }

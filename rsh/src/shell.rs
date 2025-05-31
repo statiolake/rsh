@@ -17,6 +17,7 @@ use rsh_line_parser::{
     token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind},
 };
 use same_file::is_same_file;
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -37,6 +38,7 @@ pub struct ShellState {
     pub loop_running: bool,
     pub last_working_dir: Option<PathBuf>,
     pub pushd_stack: Vec<PathBuf>,
+    pub env_vars: HashMap<String, String>,
 }
 
 impl Shell {
@@ -90,10 +92,17 @@ impl Shell {
 
 impl ShellState {
     pub fn new() -> Result<ShellState> {
+        // Initialize with current system environment variables
+        let mut env_vars = HashMap::new();
+        for (key, value) in env::vars() {
+            env_vars.insert(key, value);
+        }
+
         Ok(Self {
             loop_running: false,
             last_working_dir: None,
             pushd_stack: vec![],
+            env_vars,
         })
     }
 
@@ -110,8 +119,12 @@ impl ShellState {
         .map(drop)
     }
 
-    pub fn var(&self, name: &str) -> Option<String> {
-        env::var(name).ok()
+    pub fn var(&self, name: &str) -> Option<&str> {
+        self.env_vars.get(name).map(|s| s.as_str())
+    }
+
+    pub fn set_var(&mut self, key: String, value: String) {
+        self.env_vars.insert(key, value);
     }
 
     pub fn chdir<P: AsRef<Path>>(&mut self, target: P) -> Result<()> {
