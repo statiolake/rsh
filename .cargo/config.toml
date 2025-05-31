@@ -1,0 +1,2 @@
+[alias]
+replace-binary = "run --manifest-path dev-tools/Cargo.toml"
