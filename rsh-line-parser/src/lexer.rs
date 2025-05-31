@@ -371,6 +371,22 @@ impl<'a> Lexer<'a> {
         Ok(Spanned::new(span, word))
     }
 
+    fn next_envvar_name(&mut self) -> Result<Spanned<String>> {
+        let mut span = self.span_for_current_point();
+        let mut word = String::new();
+
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                span = span.merged(self.eat([ch]));
+                word.push(ch);
+            } else {
+                break;
+            }
+        }
+
+        Ok(Spanned::new(span, word))
+    }
+
     fn next_substitution(&mut self) -> Result<Spanned<Substitution>> {
         let mut span = self.eat(['$', '(']);
         self.substitution_level += 1;
@@ -396,7 +412,7 @@ impl<'a> Lexer<'a> {
         let varname = match self.peek_rest() {
             ['$', '{', ..] => {
                 span = span.merged(self.eat(['$', '{']));
-                let varname = self.next_ascii_word()?;
+                let varname = self.next_envvar_name()?;
                 span = span.merged(varname.span);
                 if self.peek() == Some('}') {
                     span = span.merged(self.eat(['}']));
@@ -407,7 +423,7 @@ impl<'a> Lexer<'a> {
             }
             ['$', ..] => {
                 span = span.merged(self.eat(['$']));
-                let varname = self.next_ascii_word()?;
+                let varname = self.next_envvar_name()?;
                 span = span.merged(varname.span);
                 varname.data
             }
