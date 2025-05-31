@@ -39,6 +39,11 @@
 - Avoid mixing feature implementation with refactoring in the same commit
 - Commit frequently to maintain clear development history
 
+### Pre-Commit Checks
+- Always run `git status` to review staged files before committing
+- Use `git diff --cached` to review changes that will be committed
+- Verify that only intended changes are included in the commit
+
 ## Parser/Lexer Guidelines
 
 ### Error Handling
