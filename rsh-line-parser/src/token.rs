@@ -72,6 +72,9 @@ pub enum AtomKind {
 
     /// Sub shell invocation.
     Substitution(Substitution),
+
+    /// Tilde expansion.
+    TildeExpansion(TildeExpansion),
 }
 
 impl From<AtomKind> for TokenKind {
@@ -112,6 +115,21 @@ impl From<Substitution> for AtomKind {
 
 impl From<Vec<Token>> for Substitution {
     fn from(v: Vec<Token>) -> Self {
+        Self(v)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct TildeExpansion(pub Option<String>);
+
+impl From<TildeExpansion> for AtomKind {
+    fn from(v: TildeExpansion) -> Self {
+        Self::TildeExpansion(v)
+    }
+}
+
+impl From<Option<String>> for TildeExpansion {
+    fn from(v: Option<String>) -> Self {
         Self(v)
     }
 }

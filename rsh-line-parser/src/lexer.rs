@@ -2,12 +2,12 @@ use crate::{
     span::{Span, Spanned},
     token::{
         AtomKind, DoubleQuoted, EnvVar, Redirect, RedirectKind, RedirectReferenceKind,
-        SingleQuoted, Substitution, TokenBase, TokenKindBase,
+        SingleQuoted, Substitution, TildeExpansion, TokenBase, TokenKindBase,
     },
 };
 
 pub const ESCAPE_CHAR: char = '^';
-pub const SHOULD_ESCAPE_CHAR: [char; 12] = [
+pub const SHOULD_ESCAPE_CHAR: [char; 13] = [
     ESCAPE_CHAR,
     ' ',
     '$',
@@ -20,6 +20,7 @@ pub const SHOULD_ESCAPE_CHAR: [char; 12] = [
     '>',
     '"',
     '\'',
+    '~',
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -433,6 +434,29 @@ impl<'a> Lexer<'a> {
         Ok(Spanned::new(span, EnvVar(varname)))
     }
 
+    fn next_tilde_expansion(&mut self) -> Result<Spanned<TildeExpansion>> {
+        let mut span = self.eat(['~']);
+        let mut username = String::new();
+
+        // Read username after tilde (if any)
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                span = span.merged(self.eat([ch]));
+                username.push(ch);
+            } else {
+                break;
+            }
+        }
+
+        let expansion = if username.is_empty() {
+            TildeExpansion(None)
+        } else {
+            TildeExpansion(Some(username))
+        };
+
+        Ok(Spanned::new(span, expansion))
+    }
+
     fn skip_whitespace(&mut self) -> Option<Span> {
         let mut span: Option<Span> = None;
         while let Some(ch) = self.peek() {
@@ -498,6 +522,7 @@ impl AtomTokenizable for AtomKind {
                 .next_substitution()
                 .map(|v| v.map(AtomKind::Substitution)),
             ['$', ..] => lexer.next_envvar().map(|v| v.map(AtomKind::EnvVar)),
+            ['~', ..] => lexer.next_tilde_expansion().map(|v| v.map(AtomKind::TildeExpansion)),
             _ => lexer.next_char().map(|v| v.map(AtomKind::Char)),
         }
     }
@@ -630,6 +655,9 @@ mod tests {
         };
         (env $env:expr) => {
             AtomKind::EnvVar(EnvVar($env.to_string()))
+        };
+        (tilde $tilde:expr) => {
+            AtomKind::TildeExpansion(TildeExpansion($tilde))
         };
         ($atom:expr) => {
             AtomKind::Char($atom)
@@ -1041,6 +1069,76 @@ mod tests {
             ]),
         ];
 
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn tilde_expansion() {
+        let tokens = tokenize_str("ls ~");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, atom tilde None),
+        ];
+        assert_eq!(tokens, expected);
+
+        let tokens = tokenize_str("ls ~/Documents");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..4, atom tilde None),
+            tok!(4..5, atom '/'),
+            tok!(5..6, atom 'D'),
+            tok!(6..7, atom 'o'),
+            tok!(7..8, atom 'c'),
+            tok!(8..9, atom 'u'),
+            tok!(9..10, atom 'm'),
+            tok!(10..11, atom 'e'),
+            tok!(11..12, atom 'n'),
+            tok!(12..13, atom 't'),
+            tok!(13..14, atom 's'),
+        ];
+        assert_eq!(tokens, expected);
+
+        let tokens = tokenize_str("ls ~user");
+        let expected = [
+            tok!(0..1, atom 'l'),
+            tok!(1..2, atom 's'),
+            tok!(2..3, argd),
+            tok!(3..8, atom tilde Some("user".to_string())),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn tilde_in_double_quote() {
+        let tokens = tokenize_str(r#"echo "~""#);
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..8, dquote [
+                atom!(tilde None),
+            ]),
+        ];
+        assert_eq!(tokens, expected);
+    }
+
+    #[test]
+    fn escaped_tilde() {
+        let tokens = tokenize_str("echo ^~");
+        let expected = [
+            tok!(0..1, atom 'e'),
+            tok!(1..2, atom 'c'),
+            tok!(2..3, atom 'h'),
+            tok!(3..4, atom 'o'),
+            tok!(4..5, argd),
+            tok!(5..7, atom '~'),
+        ];
         assert_eq!(tokens, expected);
     }
 }

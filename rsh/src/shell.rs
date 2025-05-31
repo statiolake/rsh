@@ -3,7 +3,7 @@ use crate::{
     executable::{Exit, ReadIntoStdio, WriteIntoStdio},
     view::beautify_path,
 };
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use anyhow::Result;
 use itertools::Itertools;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
@@ -14,7 +14,7 @@ use rsh_line_parser::{
         StdoutDestination,
     },
     span::Span,
-    token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind},
+    token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind, TildeExpansion},
 };
 use same_file::is_same_file;
 use std::collections::HashMap;
@@ -235,6 +235,12 @@ fn flatten_atom(
                 .into_iter()
                 .for_each(|token| res.push(token));
         }
+        AtomKind::TildeExpansion(tilde) => {
+            let expanded_path = expand_tilde(&tilde)?;
+            expanded_path
+                .chars()
+                .for_each(|ch| res.push(FlattenedToken::new(span, FlattenedTokenKind::Atom(ch))));
+        }
     }
 
     Ok(res)
@@ -394,6 +400,22 @@ fn run_pipe_command(state: &mut ShellState, pipe_command: PipeCommand) -> Result
         .map_err(|_| anyhow!("failed to wait for stderr capture"))??;
 
     Ok(CapturedOutput { stdout, stderr })
+}
+
+fn expand_tilde(tilde: &TildeExpansion) -> Result<String> {
+    match &tilde.0 {
+        None => {
+            // ~ expands to current user's home directory
+            let home_dir = dirs::home_dir()
+                .ok_or_else(|| anyhow!("failed to determine user home directory"))?;
+            Ok(home_dir.to_string_lossy().to_string())
+        }
+        Some(_username) => {
+            // ~username expands to specified user's home directory
+            // TODO: this is not implemented yet
+            bail!("~username expansion is not supported yet");
+        }
+    }
 }
 
 fn path_under_home(path: &Path) -> Result<PathBuf> {
