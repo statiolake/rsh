@@ -4,7 +4,7 @@ use crate::{
     executable::{Executable, Exit, ReadIntoStdio, WriteIntoStdio},
     shell::ShellState,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 #[derive(Debug)]
 pub struct CmdCd(Vec<String>);

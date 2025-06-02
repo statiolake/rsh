@@ -1,12 +1,12 @@
 use crossterm::cursor::{
-    position as cursor_position, Hide, MoveTo, MoveToPreviousLine, RestorePosition, SavePosition,
-    Show,
+    Hide, MoveTo, MoveToPreviousLine, RestorePosition, SavePosition, Show,
+    position as cursor_position,
 };
-use crossterm::event::{read, KeyCode, KeyModifiers};
 use crossterm::event::{Event, KeyEvent};
+use crossterm::event::{KeyCode, KeyModifiers, read};
 use crossterm::queue;
 use crossterm::style::Print;
-use crossterm::terminal::{size as term_size, Clear, ClearType};
+use crossterm::terminal::{Clear, ClearType, size as term_size};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Write as _};

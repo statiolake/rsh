@@ -19,9 +19,17 @@ fn main() -> Result<()> {
             binary_path.with_file_name(format!("rsh.old.{}", random_suffix))
         };
 
-        println!("Renaming existing binary to {}...", old_binary_path.file_name().unwrap().to_string_lossy());
-        fs::rename(&binary_path, &old_binary_path)
-            .with_context(|| format!("Failed to rename {} to {}", binary_path.display(), old_binary_path.display()))?;
+        println!(
+            "Renaming existing binary to {}...",
+            old_binary_path.file_name().unwrap().to_string_lossy()
+        );
+        fs::rename(&binary_path, &old_binary_path).with_context(|| {
+            format!(
+                "Failed to rename {} to {}",
+                binary_path.display(),
+                old_binary_path.display()
+            )
+        })?;
     }
 
     // Execute cargo install
@@ -130,7 +138,9 @@ fn get_cargo_install_root() -> Result<PathBuf> {
 }
 
 fn cleanup_old_binaries(binary_path: &PathBuf) -> Result<()> {
-    let bin_dir = binary_path.parent().context("Could not get parent directory")?;
+    let bin_dir = binary_path
+        .parent()
+        .context("Could not get parent directory")?;
 
     println!("Cleaning up old binary files...");
 
@@ -149,7 +159,11 @@ fn cleanup_old_binaries(binary_path: &PathBuf) -> Result<()> {
                 Ok(()) => println!("Removed: {}", file_path.display()),
                 Err(e) => {
                     // Running binaries cannot be deleted, but this is expected behavior
-                    println!("Could not remove (possibly running): {} - {}", file_path.display(), e);
+                    println!(
+                        "Could not remove (possibly running): {} - {}",
+                        file_path.display(),
+                        e
+                    );
                 }
             }
         }

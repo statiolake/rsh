@@ -3,18 +3,18 @@ use crate::{
     executable::{Exit, ReadIntoStdio, WriteIntoStdio},
     view::beautify_path,
 };
-use anyhow::{anyhow, bail};
 use anyhow::Result;
+use anyhow::{anyhow, bail};
 use itertools::Itertools;
 use rsh_line_editor::{LineEditor, PromptWriter, UserInput};
 use rsh_line_parser::{
-    lexer::{normalize_tokens, Lexer, ESCAPE_CHAR},
+    lexer::{ESCAPE_CHAR, Lexer, normalize_tokens},
     parser::{
-        parse_command_line, CommandLine, IOSpec, PipeCommand, StderrDestination, StdinSource,
-        StdoutDestination,
+        CommandLine, IOSpec, PipeCommand, StderrDestination, StdinSource, StdoutDestination,
+        parse_command_line,
     },
     span::Span,
-    token::{AtomKind, FlattenedToken, FlattenedTokenKind, Token, TokenKind, TildeExpansion},
+    token::{AtomKind, FlattenedToken, FlattenedTokenKind, TildeExpansion, Token, TokenKind},
 };
 use same_file::is_same_file;
 use std::collections::HashMap;

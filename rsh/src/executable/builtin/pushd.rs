@@ -5,7 +5,7 @@ use crate::{
     shell::ShellState,
     view::beautify_path,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 
 #[derive(Debug)]

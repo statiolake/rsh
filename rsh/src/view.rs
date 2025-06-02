@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::{Path, MAIN_SEPARATOR};
+use std::path::{MAIN_SEPARATOR, Path};
 
 pub fn beautify_path<P: AsRef<Path>>(path: P) -> Result<String> {
     let path = dunce::canonicalize(path.as_ref())?;

@@ -522,7 +522,9 @@ impl AtomTokenizable for AtomKind {
                 .next_substitution()
                 .map(|v| v.map(AtomKind::Substitution)),
             ['$', ..] => lexer.next_envvar().map(|v| v.map(AtomKind::EnvVar)),
-            ['~', ..] => lexer.next_tilde_expansion().map(|v| v.map(AtomKind::TildeExpansion)),
+            ['~', ..] => lexer
+                .next_tilde_expansion()
+                .map(|v| v.map(AtomKind::TildeExpansion)),
             _ => lexer.next_char().map(|v| v.map(AtomKind::Char)),
         }
     }

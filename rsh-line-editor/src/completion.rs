@@ -2,7 +2,7 @@ use crate::Result;
 use crate::{LineBuffer, LinePrinter};
 use std::borrow::Cow;
 use std::fs::read_dir;
-use std::path::{Path, MAIN_SEPARATOR};
+use std::path::{MAIN_SEPARATOR, Path};
 
 struct CompletePositionContext {
     start: Option<usize>,

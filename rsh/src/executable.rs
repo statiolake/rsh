@@ -1,8 +1,8 @@
 pub mod builtin;
 
 use crate::{ctrlc_handler::register_child, shell::ShellState};
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use os_pipe::PipeWriter;
 use shared_child::SharedChild;
 use std::{
